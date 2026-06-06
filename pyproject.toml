@@ -1,6 +1,6 @@
 [project]
 name = "wiseql"
-version = "0.0.1"
+version = "0.0.3"
 description = "WiseQL — the wise data browser: run SQL recipes as small, observable, debuggable steps. In development."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -8,7 +8,7 @@ authors = [{ name = "Reza Azizi", email = "azizi.ra@gmail.com" }]
 license = { text = "MIT" }
 keywords = ["sql", "debugging", "tui", "duckdb", "oracle", "data-quality", "pipeline"]
 classifiers = [
-    "Development Status :: 1 - Planning",
+    "Development Status :: 2 - Pre-Alpha",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
@@ -16,12 +16,29 @@ classifiers = [
     "Topic :: Database",
     "Topic :: Software Development :: Debuggers",
 ]
+dependencies = [
+    "textual>=1.0",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+# AI is an OPTIONAL add-on. The base app must never require these.
+# Will hold the Ollama client in Sprint 6: pip install wiseql[ai]
+ai = []
 
 [project.urls]
 Homepage = "https://wiseql.dev"
+Repository = "https://github.com/wiseql/wiseql"
+Issues = "https://github.com/wiseql/wiseql/issues"
 
 [project.scripts]
-wiseql = "wiseql:main"
+wiseql = "wiseql.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -29,3 +46,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/wiseql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

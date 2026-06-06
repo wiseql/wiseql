@@ -1,0 +1,30 @@
+# WiseQL development database — Oracle Free with planted data bugs.
+#
+#   docker compose up -d        # first boot takes a few minutes
+#   docker compose logs -f db   # wait for "DATABASE IS READY TO USE!"
+#
+# Connection (thin mode, no Instant Client needed):
+#   host=localhost port=1521 service=FREEPDB1
+#   user=wiseql password=wiseql123
+#
+# The planted bugs are documented in KNOWN_BUGS.md — every WiseQL demo
+# recipe is expected to catch them.
+
+services:
+  db:
+    image: gvenzl/oracle-free:23-slim
+    container_name: wiseql-dev-db
+    ports:
+      - "1521:1521"
+    environment:
+      ORACLE_PASSWORD: admin123          # SYS/SYSTEM password (dev only!)
+      APP_USER: wiseql
+      APP_USER_PASSWORD: wiseql123
+    volumes:
+      # Scripts run automatically on first startup, in alphabetical order.
+      - ./init:/container-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
