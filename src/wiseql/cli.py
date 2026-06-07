@@ -21,6 +21,9 @@ app = typer.Typer(
     add_completion=False,
 )
 
+conn_app = typer.Typer(help="Manage database connections (list, login, test).")
+app.add_typer(conn_app, name="conn")
+
 console = Console()
 _SEVERITY_STYLE = {"error": "bold red", "warning": "yellow"}
 
@@ -96,6 +99,184 @@ def plan(path: Path) -> None:
         console.print(
             f"[{_SEVERITY_STYLE[issue.severity]}]{issue.severity}[/] {issue.message}"
         )
+
+
+def _parse_params(pairs: list[str] | None) -> dict[str, str]:
+    """Turn ``--param k=v`` options into a bind dict."""
+    params: dict[str, str] = {}
+    for pair in pairs or []:
+        if "=" not in pair:
+            console.print(f"[bold red]bad --param '{pair}'[/] — expected key=value")
+            raise typer.Exit(code=2)
+        key, value = pair.split("=", 1)
+        params[key.strip()] = value
+    return params
+
+
+@app.command()
+def run(
+    recipe: Path,
+    step: str = typer.Option(None, "--step", "-s", help="Which database step to run."),
+    param: list[str] = typer.Option(None, "--param", "-p", help="Bind value, key=value."),
+    max_rows: int = typer.Option(1000, help="Cap on rows fetched."),
+) -> None:
+    """Run a single database step of a recipe and print its rows."""
+    from rich.table import Table
+
+    from wiseql.engine import choose_step, run_step
+    from wiseql.recipes import load_recipe
+
+    loaded = load_recipe(recipe)
+    if not loaded.ok:
+        console.print(f"[bold red]invalid recipe:[/] {recipe}")
+        for issue in loaded.errors:
+            console.print(f"    [red]{issue}[/]")
+        raise typer.Exit(code=1)
+
+    choice, why = choose_step(loaded, step)
+    if choice is None:
+        console.print(f"[bold red]cannot run:[/] {why}")
+        raise typer.Exit(code=1)
+
+    config = _load_config().config
+    conn = config.connections.get(choice.source)
+    if conn is None:
+        console.print(
+            f"[bold red]step '{choice.name}' uses connection '{choice.source}'[/] "
+            "which is not configured — add it or run `wiseql conn list`."
+        )
+        raise typer.Exit(code=1)
+
+    params = _parse_params(param)
+    console.print(f"Running step [b]{choice.name}[/] on [b]{choice.source}[/] [dim]{conn.target}[/dim] …")
+    # The auth backend keys off the *connection* name (choice.source), not the step.
+    result = run_step(choice.source, conn, choice.sql, params=params, max_rows=max_rows)
+    if not result.ok:
+        console.print(f"[bold red]✗ {result.error}[/]")
+        raise typer.Exit(code=1)
+
+    table = Table(show_lines=False)
+    for col in result.columns:
+        table.add_column(col)
+    for row in result.rows:
+        table.add_row(*["" if v is None else str(v) for v in row])
+    console.print(table)
+    suffix = "+" if result.truncated else ""
+    console.print(
+        f"[green]✓[/] {result.row_count}{suffix} row(s) in {result.elapsed_ms} ms"
+        + ("  [yellow](truncated — more rows exist)[/]" if result.truncated else "")
+    )
+
+
+def _load_config():
+    """Load layered config, printing any errors. Returns the ConfigResult.
+
+    ``$WISEQL_CONFIG`` overrides the global config file path (handy for CI and
+    for pointing at an alternate config without touching ``~/.config``).
+    """
+    from wiseql.config import load_active_config
+
+    result = load_active_config()
+    for err in result.errors:
+        console.print(f"[bold red]config error[/] {err}")
+    return result
+
+
+@conn_app.command("list")
+def conn_list() -> None:
+    """List configured connections (metadata only — no database contact)."""
+    from rich.table import Table
+
+    from wiseql.config import get_backend
+
+    result = _load_config()
+    config = result.config
+    if not config.connections:
+        console.print(
+            "[yellow]No connections configured.[/]\n"
+            "Add a [b][connections.<name>][/b] table to "
+            "[b]~/.config/wiseql/config.toml[/b] or your project's [b]project.toml[/b], "
+            "then [b]wiseql conn login <name>[/b]."
+        )
+        raise typer.Exit(code=1 if result.errors else 0)
+
+    default = config.defaults.connection
+    table = Table(title="WiseQL connections")
+    table.add_column("name", style="bold")
+    table.add_column("driver")
+    table.add_column("target")
+    table.add_column("user")
+    table.add_column("secret from")
+    for name, conn in sorted(config.connections.items()):
+        marker = " [cyan](default)[/]" if name == default else ""
+        backend = get_backend(conn)
+        table.add_row(
+            f"{name}{marker}",
+            conn.driver,
+            conn.target,
+            conn.user or "[dim]—[/]",
+            backend.describe(name),
+        )
+    console.print(table)
+
+
+@conn_app.command("login")
+def conn_login(name: str) -> None:
+    """Store the password for a connection in its auth backend."""
+    from wiseql.config import get_backend
+
+    result = _load_config()
+    conn = result.config.connections.get(name)
+    if conn is None:
+        console.print(f"[bold red]unknown connection:[/] {name}")
+        raise typer.Exit(code=1)
+
+    backend = get_backend(conn)
+    if conn.auth == "env":
+        console.print(
+            f"Connection [b]{name}[/] uses the [b]env[/] backend — set "
+            f"[b]{backend.describe(name).split(':', 1)[1]}[/b] in your environment; "
+            "nothing to store."
+        )
+        return
+    if conn.auth == "wallet":
+        console.print(
+            f"Connection [b]{name}[/] uses an Oracle [b]wallet[/] — credentials come "
+            "from TNS_ADMIN at connect time; nothing to store."
+        )
+        return
+
+    password = typer.prompt(f"Password for {conn.user}@{name}", hide_input=True)
+    backend.set_password(name, conn, password)
+    console.print(f"[green]✓[/] stored password for [b]{name}[/] ({backend.describe(name)})")
+
+
+@conn_app.command("test")
+def conn_test(name: str | None = typer.Argument(None)) -> None:
+    """Connect to a database and verify reachability (latency + version)."""
+    from wiseql.config import ping
+
+    result = _load_config()
+    config = result.config
+    target = config.resolve_name(name)
+    if target is None:
+        console.print(
+            "[bold red]no connection given[/] and no default configured — "
+            "pass a name or set [b][defaults] connection[/b]."
+        )
+        raise typer.Exit(code=1)
+    conn = config.connections.get(target)
+    if conn is None:
+        console.print(f"[bold red]unknown connection:[/] {target}")
+        raise typer.Exit(code=1)
+
+    console.print(f"Testing [b]{target}[/] → [dim]{conn.target}[/dim] …")
+    outcome = ping(target, conn)
+    if outcome.ok:
+        console.print(f"[bold green]✓ connected[/] in {outcome.elapsed_ms} ms — {outcome.detail}")
+    else:
+        console.print(f"[bold red]✗ failed[/] after {outcome.elapsed_ms} ms — {outcome.detail}")
+        raise typer.Exit(code=1)
 
 
 def main() -> None:
