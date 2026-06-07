@@ -24,6 +24,7 @@ HELP_TEXT = f"""\
 
 [b]Keys[/b]
   F1  or ?       This help
+  F3             Connections (list · test · login)
   F4             Re-validate selected recipe
   F5             Rebuild plan for selected recipe
   F10 or q       Quit (also Ctrl+Q)
@@ -85,6 +86,7 @@ class WiseQLApp(App[None]):
 
     BINDINGS = [
         Binding("f1", "help", "Help"),
+        Binding("f3", "connections", "Connections"),
         Binding("f4", "validate", "Validate"),
         Binding("f5", "plan", "Plan"),
         Binding("f10", "quit", "Quit"),
@@ -101,10 +103,13 @@ class WiseQLApp(App[None]):
     #dag-tree { height: auto; }
     """
 
-    def __init__(self, recipes_dir: Path | None = None) -> None:
+    def __init__(
+        self, recipes_dir: Path | None = None, config_path: Path | None = None
+    ) -> None:
         super().__init__()
         self.ai = get_provider()  # NullProvider until the [ai] add-on (Sprint 6)
         self.recipes_dir = recipes_dir or find_recipes_dir(Path.cwd())
+        self.config_path = config_path  # None → $WISEQL_CONFIG / standard location
         self._current: LoadResult | None = None
 
     # --- layout -------------------------------------------------------------
@@ -193,6 +198,11 @@ class WiseQLApp(App[None]):
 
     def action_help(self) -> None:
         self.push_screen(HelpScreen())
+
+    def action_connections(self) -> None:
+        from wiseql.tui.connections import ConnectionsScreen
+
+        self.push_screen(ConnectionsScreen(config_path=self.config_path))
 
     def action_validate(self) -> None:
         list_view = self.query_one("#recipe-list", ListView)

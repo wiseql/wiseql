@@ -14,6 +14,7 @@ model's ``extra="forbid"``.
 
 from __future__ import annotations
 
+import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -127,3 +128,23 @@ def load_config(
 
     config = WiseQLConfig(connections=connections, defaults=defaults)
     return ConfigResult(config=config, errors=errors, sources=sources)
+
+
+# Env var that overrides the global config path (CI / alternate configs).
+CONFIG_ENV_VAR = "WISEQL_CONFIG"
+
+
+def active_global_path(explicit: Path | None = None) -> Path | None:
+    """Resolve the global config path the app should use: an explicit override,
+    else ``$WISEQL_CONFIG``, else None (the loader's standard default)."""
+    if explicit is not None:
+        return explicit
+    if env_path := os.environ.get(CONFIG_ENV_VAR):
+        return Path(env_path)
+    return None
+
+
+def load_active_config(global_path: Path | None = None, **kwargs) -> ConfigResult:
+    """``load_config`` with the global path resolved from an override or
+    ``$WISEQL_CONFIG``. Shared entry point for the CLI and TUI."""
+    return load_config(global_path=active_global_path(global_path), **kwargs)

@@ -107,15 +107,9 @@ def _load_config():
     ``$WISEQL_CONFIG`` overrides the global config file path (handy for CI and
     for pointing at an alternate config without touching ``~/.config``).
     """
-    import os
+    from wiseql.config import load_active_config
 
-    from wiseql.config import load_config
-
-    global_path = None
-    if env_path := os.environ.get("WISEQL_CONFIG"):
-        global_path = Path(env_path)
-
-    result = load_config(global_path=global_path)
+    result = load_active_config()
     for err in result.errors:
         console.print(f"[bold red]config error[/] {err}")
     return result
