@@ -101,6 +101,73 @@ def plan(path: Path) -> None:
         )
 
 
+def _parse_params(pairs: list[str] | None) -> dict[str, str]:
+    """Turn ``--param k=v`` options into a bind dict."""
+    params: dict[str, str] = {}
+    for pair in pairs or []:
+        if "=" not in pair:
+            console.print(f"[bold red]bad --param '{pair}'[/] — expected key=value")
+            raise typer.Exit(code=2)
+        key, value = pair.split("=", 1)
+        params[key.strip()] = value
+    return params
+
+
+@app.command()
+def run(
+    recipe: Path,
+    step: str = typer.Option(None, "--step", "-s", help="Which database step to run."),
+    param: list[str] = typer.Option(None, "--param", "-p", help="Bind value, key=value."),
+    max_rows: int = typer.Option(1000, help="Cap on rows fetched."),
+) -> None:
+    """Run a single database step of a recipe and print its rows."""
+    from rich.table import Table
+
+    from wiseql.engine import choose_step, run_step
+    from wiseql.recipes import load_recipe
+
+    loaded = load_recipe(recipe)
+    if not loaded.ok:
+        console.print(f"[bold red]invalid recipe:[/] {recipe}")
+        for issue in loaded.errors:
+            console.print(f"    [red]{issue}[/]")
+        raise typer.Exit(code=1)
+
+    choice, why = choose_step(loaded, step)
+    if choice is None:
+        console.print(f"[bold red]cannot run:[/] {why}")
+        raise typer.Exit(code=1)
+
+    config = _load_config().config
+    conn = config.connections.get(choice.source)
+    if conn is None:
+        console.print(
+            f"[bold red]step '{choice.name}' uses connection '{choice.source}'[/] "
+            "which is not configured — add it or run `wiseql conn list`."
+        )
+        raise typer.Exit(code=1)
+
+    params = _parse_params(param)
+    console.print(f"Running step [b]{choice.name}[/] on [b]{choice.source}[/] [dim]{conn.target}[/dim] …")
+    # The auth backend keys off the *connection* name (choice.source), not the step.
+    result = run_step(choice.source, conn, choice.sql, params=params, max_rows=max_rows)
+    if not result.ok:
+        console.print(f"[bold red]✗ {result.error}[/]")
+        raise typer.Exit(code=1)
+
+    table = Table(show_lines=False)
+    for col in result.columns:
+        table.add_column(col)
+    for row in result.rows:
+        table.add_row(*["" if v is None else str(v) for v in row])
+    console.print(table)
+    suffix = "+" if result.truncated else ""
+    console.print(
+        f"[green]✓[/] {result.row_count}{suffix} row(s) in {result.elapsed_ms} ms"
+        + ("  [yellow](truncated — more rows exist)[/]" if result.truncated else "")
+    )
+
+
 def _load_config():
     """Load layered config, printing any errors. Returns the ConfigResult.
 

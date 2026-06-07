@@ -24,6 +24,7 @@ HELP_TEXT = f"""\
 
 [b]Keys[/b]
   F1  or ?       This help
+  F2             Run selected recipe's database step (results grid)
   F3             Connections (list · test · login)
   F4             Re-validate selected recipe
   F5             Rebuild plan for selected recipe
@@ -86,6 +87,7 @@ class WiseQLApp(App[None]):
 
     BINDINGS = [
         Binding("f1", "help", "Help"),
+        Binding("f2", "run", "Run"),
         Binding("f3", "connections", "Connections"),
         Binding("f4", "validate", "Validate"),
         Binding("f5", "plan", "Plan"),
@@ -203,6 +205,37 @@ class WiseQLApp(App[None]):
         from wiseql.tui.connections import ConnectionsScreen
 
         self.push_screen(ConnectionsScreen(config_path=self.config_path))
+
+    def action_run(self) -> None:
+        from wiseql.config import load_active_config
+        from wiseql.engine import choose_step
+        from wiseql.tui.results import ResultsScreen
+
+        if self._current is None or self._current.recipe is None:
+            return
+        choice, why = choose_step(self._current)
+        if choice is None:
+            self.notify(why or "cannot run", severity="warning")
+            return
+        params = self._current.recipe.recipe.params
+        if params:
+            # Parameter prompt form is Sprint 3.2; until then, the headless CLI
+            # (`wiseql run --param`) handles parameterised recipes.
+            self.notify(
+                f"'{self._current.recipe.recipe.name}' needs params ({', '.join(params)}); "
+                "TUI prompt arrives in Sprint 3.2 — use `wiseql run --param` for now",
+                severity="warning",
+            )
+            return
+        config = load_active_config(self.config_path).config
+        conn = config.connections.get(choice.source)
+        if conn is None:
+            self.notify(
+                f"connection '{choice.source}' is not configured (F3 to manage)",
+                severity="error",
+            )
+            return
+        self.push_screen(ResultsScreen(choice, conn))
 
     def action_validate(self) -> None:
         list_view = self.query_one("#recipe-list", ListView)
