@@ -1,0 +1,29 @@
+# Demo: find returns whose order does not exist (catches BUG-1 in dev-db).
+
+[recipe]
+name        = "orphan-returns"
+description = "Returns whose order_id does not exist in orders"
+
+[steps.orders]
+source = "oracle_dev"
+sql = """
+SELECT order_id, customer_id, order_date
+FROM orders
+"""
+assert = { rows_min = 1 }
+
+[steps.returns]
+source   = "oracle_dev"
+sql_file = "sql/returns.sql"
+assert = { rows_min = 1 }
+
+[steps.orphans]
+description = "Anti-join: returns with no matching order"
+inputs = ["orders", "returns"]
+sql = """
+SELECT r.*
+FROM returns r
+LEFT JOIN orders o USING (order_id)
+WHERE o.order_id IS NULL
+"""
+assert = { rows_max = 0, on_fail = "report_samples" }

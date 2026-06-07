@@ -1,0 +1,10 @@
+[recipe]
+name = "broken-bad-ref"
+
+[steps.orders]
+source = "oracle_dev"
+sql = "SELECT order_id FROM orders"
+
+[steps.combine]
+inputs = ["orders", "ghosts"]
+sql = "SELECT * FROM orders"

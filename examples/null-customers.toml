@@ -1,0 +1,15 @@
+# Demo: orders with missing customer_id since a given date (catches BUG-2).
+
+[recipe]
+name        = "null-customers"
+description = "Orders with NULL customer_id on or after :run_date"
+params      = ["run_date"]
+
+[steps.recent_orders]
+source = "oracle_dev"
+sql = """
+SELECT order_id, customer_id, store_id, order_date
+FROM orders
+WHERE order_date >= :run_date
+"""
+assert = { rows_min = 1, no_nulls = ["customer_id"], on_fail = "report_samples" }

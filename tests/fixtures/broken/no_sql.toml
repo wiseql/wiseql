@@ -1,0 +1,6 @@
+[recipe]
+name = "broken-no-sql"
+
+[steps.orders]
+source = "oracle_dev"
+# neither sql nor sql_file

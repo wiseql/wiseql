@@ -1,0 +1,34 @@
+# Demo: daily order volume + duplicate detection (catches BUG-3, surfaces BUG-4).
+
+[recipe]
+name        = "daily-volume"
+description = "Orders per day, plus duplicate order_id detection"
+
+[steps.orders]
+source = "oracle_dev"
+sql = """
+SELECT order_id, order_date, store_id
+FROM orders
+"""
+
+[steps.per_day]
+description = "Row count per day — a date gap shows as a missing day"
+inputs = ["orders"]
+sql = """
+SELECT order_date, COUNT(*) AS orders_count
+FROM orders
+GROUP BY order_date
+ORDER BY order_date
+"""
+assert = { rows_min = 1 }
+
+[steps.duplicates]
+description = "order_id values appearing more than once"
+inputs = ["orders"]
+sql = """
+SELECT order_id, COUNT(*) AS occurrences
+FROM orders
+GROUP BY order_id
+HAVING COUNT(*) > 1
+"""
+assert = { rows_max = 0, on_fail = "report_samples" }

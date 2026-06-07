@@ -1,0 +1,10 @@
+[recipe]
+name = "broken-cycle"
+
+[steps.a]
+inputs = ["b"]
+sql = "SELECT * FROM b"
+
+[steps.b]
+inputs = ["a"]
+sql = "SELECT * FROM a"

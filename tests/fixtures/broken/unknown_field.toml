@@ -1,0 +1,6 @@
+[recipe]
+name = "broken-unknown-field"
+
+[steps.orders]
+source = "oracle_dev"
+sqll   = "SELECT 1 FROM dual"   # typo: 'sqll'

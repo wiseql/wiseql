@@ -1,0 +1,7 @@
+[recipe]
+name = "broken-both-sql"
+
+[steps.orders]
+source   = "oracle_dev"
+sql      = "SELECT 1 FROM dual"
+sql_file = "sql/whatever.sql"
