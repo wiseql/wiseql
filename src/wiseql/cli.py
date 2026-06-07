@@ -21,6 +21,9 @@ app = typer.Typer(
     add_completion=False,
 )
 
+conn_app = typer.Typer(help="Manage database connections (list, login, test).")
+app.add_typer(conn_app, name="conn")
+
 console = Console()
 _SEVERITY_STYLE = {"error": "bold red", "warning": "yellow"}
 
@@ -96,6 +99,123 @@ def plan(path: Path) -> None:
         console.print(
             f"[{_SEVERITY_STYLE[issue.severity]}]{issue.severity}[/] {issue.message}"
         )
+
+
+def _load_config():
+    """Load layered config, printing any errors. Returns the ConfigResult.
+
+    ``$WISEQL_CONFIG`` overrides the global config file path (handy for CI and
+    for pointing at an alternate config without touching ``~/.config``).
+    """
+    import os
+
+    from wiseql.config import load_config
+
+    global_path = None
+    if env_path := os.environ.get("WISEQL_CONFIG"):
+        global_path = Path(env_path)
+
+    result = load_config(global_path=global_path)
+    for err in result.errors:
+        console.print(f"[bold red]config error[/] {err}")
+    return result
+
+
+@conn_app.command("list")
+def conn_list() -> None:
+    """List configured connections (metadata only — no database contact)."""
+    from rich.table import Table
+
+    from wiseql.config import get_backend
+
+    result = _load_config()
+    config = result.config
+    if not config.connections:
+        console.print(
+            "[yellow]No connections configured.[/]\n"
+            "Add a [b][connections.<name>][/b] table to "
+            "[b]~/.config/wiseql/config.toml[/b] or your project's [b]project.toml[/b], "
+            "then [b]wiseql conn login <name>[/b]."
+        )
+        raise typer.Exit(code=1 if result.errors else 0)
+
+    default = config.defaults.connection
+    table = Table(title="WiseQL connections")
+    table.add_column("name", style="bold")
+    table.add_column("driver")
+    table.add_column("target")
+    table.add_column("user")
+    table.add_column("secret from")
+    for name, conn in sorted(config.connections.items()):
+        marker = " [cyan](default)[/]" if name == default else ""
+        backend = get_backend(conn)
+        table.add_row(
+            f"{name}{marker}",
+            conn.driver,
+            conn.target,
+            conn.user or "[dim]—[/]",
+            backend.describe(name),
+        )
+    console.print(table)
+
+
+@conn_app.command("login")
+def conn_login(name: str) -> None:
+    """Store the password for a connection in its auth backend."""
+    from wiseql.config import get_backend
+
+    result = _load_config()
+    conn = result.config.connections.get(name)
+    if conn is None:
+        console.print(f"[bold red]unknown connection:[/] {name}")
+        raise typer.Exit(code=1)
+
+    backend = get_backend(conn)
+    if conn.auth == "env":
+        console.print(
+            f"Connection [b]{name}[/] uses the [b]env[/] backend — set "
+            f"[b]{backend.describe(name).split(':', 1)[1]}[/b] in your environment; "
+            "nothing to store."
+        )
+        return
+    if conn.auth == "wallet":
+        console.print(
+            f"Connection [b]{name}[/] uses an Oracle [b]wallet[/] — credentials come "
+            "from TNS_ADMIN at connect time; nothing to store."
+        )
+        return
+
+    password = typer.prompt(f"Password for {conn.user}@{name}", hide_input=True)
+    backend.set_password(name, conn, password)
+    console.print(f"[green]✓[/] stored password for [b]{name}[/] ({backend.describe(name)})")
+
+
+@conn_app.command("test")
+def conn_test(name: str | None = typer.Argument(None)) -> None:
+    """Connect to a database and verify reachability (latency + version)."""
+    from wiseql.config import ping
+
+    result = _load_config()
+    config = result.config
+    target = config.resolve_name(name)
+    if target is None:
+        console.print(
+            "[bold red]no connection given[/] and no default configured — "
+            "pass a name or set [b][defaults] connection[/b]."
+        )
+        raise typer.Exit(code=1)
+    conn = config.connections.get(target)
+    if conn is None:
+        console.print(f"[bold red]unknown connection:[/] {target}")
+        raise typer.Exit(code=1)
+
+    console.print(f"Testing [b]{target}[/] → [dim]{conn.target}[/dim] …")
+    outcome = ping(target, conn)
+    if outcome.ok:
+        console.print(f"[bold green]✓ connected[/] in {outcome.elapsed_ms} ms — {outcome.detail}")
+    else:
+        console.print(f"[bold red]✗ failed[/] after {outcome.elapsed_ms} ms — {outcome.detail}")
+        raise typer.Exit(code=1)
 
 
 def main() -> None:

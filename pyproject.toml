@@ -20,6 +20,8 @@ dependencies = [
     "textual>=1.0",
     "typer>=0.12",
     "pydantic>=2.7",
+    "oracledb>=2.4",  # python-oracledb, thin mode — no Oracle Instant Client needed
+    "keyring>=25.0",         # OS keychain for connection secrets
 ]
 
 [project.optional-dependencies]
