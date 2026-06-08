@@ -30,6 +30,7 @@ HELP_TEXT = f"""\
   F4             Re-validate selected recipe
   F5             Rebuild plan for selected recipe
   F10 or q       Quit (also Ctrl+Q)
+  Ctrl+N         New project (scaffold here)
   ↑/↓            Select recipe
 
 [dim]macOS: F-keys are media keys by default — press Fn+F10, or enable
@@ -96,6 +97,7 @@ class WiseQLApp(App[None]):
         Binding("f4", "validate", "Validate"),
         Binding("f5", "plan", "Plan"),
         Binding("f10", "quit", "Quit"),
+        Binding("ctrl+n", "new_project", "New project"),
         # macOS fallbacks: F-keys are media keys by default (F10 = mute),
         # so always provide plain-key alternatives.
         Binding("q", "quit", "Quit", show=False),
@@ -209,6 +211,23 @@ class WiseQLApp(App[None]):
         from wiseql.tui.connections import ConnectionsScreen
 
         self.push_screen(ConnectionsScreen(config_path=self.config_path))
+
+    def action_new_project(self) -> None:
+        from wiseql.project import scaffold_project
+        from wiseql.tui.wizard import ProjectWizard
+
+        def _create(values: dict | None) -> None:
+            if values is None:
+                return
+            dest = Path.cwd() / values["name"]
+            try:
+                scaffold_project(dest, values["name"], description=values["description"])
+            except (FileExistsError, OSError) as exc:
+                self.notify(str(exc), severity="error")
+                return
+            self.notify(f"Created project '{values['name']}' at {dest}")
+
+        self.push_screen(ProjectWizard(), _create)
 
     def action_run(self) -> None:
         from wiseql.config import load_active_config

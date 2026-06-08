@@ -44,6 +44,31 @@ def version() -> None:
 
 
 @app.command()
+def init(
+    name: str,
+    connection: str = typer.Option(None, "--connection", "-c", help="Default connection name."),
+    description: str = typer.Option("", "--description", "-d"),
+) -> None:
+    """Scaffold a new WiseQL project directory."""
+    from wiseql.project import scaffold_project
+
+    dest = Path.cwd() / name
+    try:
+        created = scaffold_project(dest, name, description=description, connection=connection)
+    except (FileExistsError, OSError) as exc:
+        console.print(f"[bold red]cannot create project:[/] {exc}")
+        raise typer.Exit(code=1)
+
+    console.print(f"[green]✓[/] created project [b]{name}[/] at [dim]{dest}[/]")
+    for path in created:
+        console.print(f"    [dim]{path.relative_to(Path.cwd())}[/]")
+    console.print(
+        f"\nNext: [b]cd {name}[/]  ·  add recipes to [b]recipes/[/]  ·  "
+        "[b]wiseql conn login[/]  ·  [b]wiseql context sync[/]"
+    )
+
+
+@app.command()
 def validate(paths: list[Path]) -> None:
     """Validate one or more recipe files. Exit code 1 if any has errors."""
     from wiseql.recipes import build_plan, load_recipe
