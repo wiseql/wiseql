@@ -24,7 +24,7 @@ HELP_TEXT = f"""\
 
 [b]Keys[/b]
   F1  or ?       This help
-  F2             Run selected recipe's database step (results grid)
+  F2             Run selected recipe (live DAG view; Enter on a step = detail)
   F3             Connections (list · test · login)
   F4             Re-validate selected recipe
   F5             Rebuild plan for selected recipe
@@ -208,39 +208,33 @@ class WiseQLApp(App[None]):
 
     def action_run(self) -> None:
         from wiseql.config import load_active_config
-        from wiseql.engine import choose_step
 
         if self._current is None or self._current.recipe is None:
+            self.notify("no valid recipe selected", severity="warning")
             return
-        choice, why = choose_step(self._current)
-        if choice is None:
-            self.notify(why or "cannot run", severity="warning")
-            return
-        config = load_active_config(self.config_path).config
-        conn = config.connections.get(choice.source)
-        if conn is None:
-            self.notify(
-                f"connection '{choice.source}' is not configured (F3 to manage)",
-                severity="error",
-            )
+        if not self._current.ok:
+            self.notify("recipe has errors — F4 to see them", severity="warning")
             return
 
+        config = load_active_config(self.config_path).config
         declared = self._current.recipe.recipe.params
         if declared:
             from wiseql.tui.params import ParamModal
 
             def _got(values: dict | None) -> None:
                 if values is not None:
-                    self._launch_results(choice, conn, values)
+                    self._launch_run(config, values)
 
             self.push_screen(ParamModal(self._current.recipe.recipe.name, declared), _got)
         else:
-            self._launch_results(choice, conn, {})
+            self._launch_run(config, {})
 
-    def _launch_results(self, choice, conn, params: dict) -> None:
-        from wiseql.tui.results import ResultsScreen
+    def _launch_run(self, config, params: dict) -> None:
+        from wiseql.tui.run import RunScreen
 
-        self.push_screen(ResultsScreen(choice, conn, params))
+        self.push_screen(
+            RunScreen(self._current, config, params, self._current.recipe.recipe.name)
+        )
 
     def action_validate(self) -> None:
         list_view = self.query_one("#recipe-list", ListView)

@@ -94,12 +94,20 @@ def run_recipe(
     *,
     params: dict | None = None,
     environ=None,
+    on_step=None,
 ) -> RunResult:
     """Execute every step of a recipe through DuckDB and return per-step results.
 
     Stops at the first failing step (downstream steps depend on it). Never
     raises for operational problems — they surface as ``ok=False``.
+
+    ``on_step(name, step_run)`` is an optional progress callback: called with
+    ``step_run=None`` when a step starts running, and with the completed
+    ``StepRun`` when it finishes — so a live UI can light up the DAG.
     """
+    def _notify(name, step_run) -> None:
+        if on_step is not None:
+            on_step(name, step_run)
     recipe = loaded.recipe
     if recipe is None or not loaded.ok:
         return RunResult(ok=False, error="recipe is invalid")
@@ -121,6 +129,7 @@ def run_recipe(
             step = recipe.steps[name]
             started = time.perf_counter()
             sql = (loaded.resolved_sql.get(name) or "").strip().rstrip(";").strip()
+            _notify(name, None)  # step is running
             try:
                 if step.source:  # database step
                     self_run = _run_db_step(
@@ -129,17 +138,17 @@ def run_recipe(
                 else:  # local DuckDB step
                     self_run = _run_local_step(duck, name, step.inputs, sql)
             except Exception as exc:  # noqa: BLE001 — record and stop the run
-                result.steps.append(
-                    StepRun(
-                        name=name,
-                        kind="db" if step.source else "local",
-                        source=step.source,
-                        ok=False,
-                        elapsed_ms=_ms(started),
-                        error=str(exc).strip(),
-                    )
+                failed = StepRun(
+                    name=name,
+                    kind="db" if step.source else "local",
+                    source=step.source,
+                    ok=False,
+                    elapsed_ms=_ms(started),
+                    error=str(exc).strip(),
                 )
+                result.steps.append(failed)
                 result.ok = False
+                _notify(name, failed)
                 break
 
             self_run.elapsed_ms = _ms(started)
@@ -147,6 +156,7 @@ def run_recipe(
                 self_run.on_fail = step.assert_.on_fail
                 _evaluate_assertions(duck, self_run, step.assert_, result.steps)
             result.steps.append(self_run)
+            _notify(name, self_run)
 
             if not self_run.ok:
                 result.ok = False
