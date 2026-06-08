@@ -24,6 +24,9 @@ app = typer.Typer(
 conn_app = typer.Typer(help="Manage database connections (list, login, test).")
 app.add_typer(conn_app, name="conn")
 
+context_app = typer.Typer(help="Project context (schema sync).")
+app.add_typer(context_app, name="context")
+
 console = Console()
 _SEVERITY_STYLE = {"error": "bold red", "warning": "yellow"}
 
@@ -364,6 +367,45 @@ def conn_test(name: str | None = typer.Argument(None)) -> None:
     else:
         console.print(f"[bold red]✗ failed[/] after {outcome.elapsed_ms} ms — {outcome.detail}")
         raise typer.Exit(code=1)
+
+
+@context_app.command("sync")
+def context_sync(
+    connection: str = typer.Option(None, "--connection", "-c", help="Connection to introspect."),
+) -> None:
+    """Introspect the database schema into context/tables.md (notes preserved)."""
+    from wiseql.config import open_connection
+    from wiseql.context import introspect_tables, write_tables_md
+    from wiseql.project import PROJECT_MANIFEST, find_project_root
+
+    root = find_project_root()
+    if root is None:
+        console.print(
+            "[bold red]not in a project[/] — run inside a project directory "
+            f"(one with {PROJECT_MANIFEST}), or create one with [b]wiseql init[/]."
+        )
+        raise typer.Exit(code=1)
+
+    config = _load_config().config
+    name = config.resolve_name(connection)
+    conn = config.connections.get(name) if name else None
+    if conn is None:
+        console.print(f"[bold red]unknown or unset connection:[/] {name or '(none)'}")
+        raise typer.Exit(code=1)
+
+    console.print(f"Introspecting [b]{name}[/] [dim]{conn.target}[/dim] …")
+    try:
+        connection_obj = open_connection(name, conn)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[bold red]✗ connect failed:[/] {str(exc).strip()}")
+        raise typer.Exit(code=1)
+    try:
+        tables = introspect_tables(connection_obj)
+    finally:
+        connection_obj.close()
+
+    path = write_tables_md(root / "context" / "tables.md", tables, project_name=root.name)
+    console.print(f"[green]✓[/] synced {len(tables)} table(s) → [dim]{path}[/]")
 
 
 def main() -> None:

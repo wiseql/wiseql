@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
@@ -32,6 +33,7 @@ HELP_TEXT = f"""\
   F6             Reports (past runs · Enter to open)
   F10 or q       Quit (also Ctrl+Q)
   Ctrl+N         New project (scaffold here)
+  Ctrl+T         Sync DB schema → context/tables.md
   ↑/↓            Select recipe
 
 [dim]macOS: F-keys are media keys by default — press Fn+F10, or enable
@@ -100,6 +102,7 @@ class WiseQLApp(App[None]):
         Binding("f6", "reports", "Reports"),
         Binding("f10", "quit", "Quit"),
         Binding("ctrl+n", "new_project", "New project"),
+        Binding("ctrl+t", "sync_context", "Sync schema"),
         # macOS fallbacks: F-keys are media keys by default (F10 = mute),
         # so always provide plain-key alternatives.
         Binding("q", "quit", "Quit", show=False),
@@ -218,6 +221,44 @@ class WiseQLApp(App[None]):
         from wiseql.tui.reports import ReportsScreen
 
         self.push_screen(ReportsScreen())
+
+    def action_sync_context(self) -> None:
+        from wiseql.config import load_active_config
+        from wiseql.project import find_project_root
+
+        root = find_project_root()
+        if root is None:
+            self.notify("not in a project — Ctrl+N to create one", severity="warning")
+            return
+        config = load_active_config(self.config_path).config
+        name = config.defaults.connection
+        conn = config.connections.get(name) if name else None
+        if conn is None:
+            self.notify("no default connection configured (F3)", severity="error")
+            return
+        self.notify(f"Syncing schema from {name} …")
+        self._sync_worker(root, name, conn)
+
+    @work(thread=True)
+    def _sync_worker(self, root, name, conn) -> None:
+        from wiseql.config import open_connection
+        from wiseql.context import introspect_tables, write_tables_md
+
+        try:
+            connection = open_connection(name, conn)
+            try:
+                tables = introspect_tables(connection)
+            finally:
+                connection.close()
+            write_tables_md(root / "context" / "tables.md", tables, project_name=root.name)
+        except Exception as exc:  # noqa: BLE001
+            self.app.call_from_thread(
+                self.notify, f"sync failed: {str(exc).strip()}", severity="error"
+            )
+            return
+        self.app.call_from_thread(
+            self.notify, f"Synced {len(tables)} tables → context/tables.md"
+        )
 
     def action_new_project(self) -> None:
         from wiseql.project import scaffold_project

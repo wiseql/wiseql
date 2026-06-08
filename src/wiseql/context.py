@@ -1,0 +1,148 @@
+"""Context sync (S4.3): introspect the database into ``context/tables.md``.
+
+Scope note: this introspects **all tables the connection can see** (the Oracle
+data dictionary), not the tables a recipe happens to reference — extracting
+table names from arbitrary SQL is fragile, and the full schema is more useful
+grounding anyway.
+
+The introspection query is kept separate from the markdown merge so the merge —
+which must preserve hand-written notes across re-syncs — is testable offline. The
+generated schema only ever replaces the content between the
+``<!-- wiseql:auto -->`` markers; everything else in the file is preserved.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from wiseql.project import AUTO_END, AUTO_START
+
+
+@dataclass
+class Column:
+    name: str
+    type: str
+    nullable: bool
+    pk: bool = False
+
+
+@dataclass
+class Table:
+    name: str
+    columns: list[Column] = field(default_factory=list)
+    comment: str = ""
+    foreign_keys: list[tuple[str, str]] = field(default_factory=list)  # (column, ref_table)
+
+
+def _format_type(data_type, length, precision, scale) -> str:
+    if data_type in ("VARCHAR2", "CHAR", "NVARCHAR2", "NCHAR") and length:
+        return f"{data_type}({length})"
+    if data_type == "NUMBER":
+        if precision and scale:
+            return f"NUMBER({precision},{scale})"
+        if precision:
+            return f"NUMBER({precision})"
+    return data_type
+
+
+def introspect_tables(connection) -> list[Table]:
+    """Read columns, primary keys, foreign keys, and comments from the Oracle
+    data dictionary for the connection's own schema. Needs a live connection."""
+    cols: dict[str, list[Column]] = {}
+    with connection.cursor() as cur:
+        cur.execute(
+            "SELECT table_name, column_name, data_type, data_length, data_precision, "
+            "data_scale, nullable FROM user_tab_columns ORDER BY table_name, column_id"
+        )
+        for tname, cname, dtype, dlen, dprec, dscale, nullable in cur.fetchall():
+            cols.setdefault(tname, []).append(
+                Column(cname, _format_type(dtype, dlen, dprec, dscale), nullable == "Y")
+            )
+
+        pks: dict[str, set] = {}
+        cur.execute(
+            "SELECT cc.table_name, cc.column_name FROM user_constraints c "
+            "JOIN user_cons_columns cc ON c.constraint_name = cc.constraint_name "
+            "WHERE c.constraint_type = 'P'"
+        )
+        for tname, cname in cur.fetchall():
+            pks.setdefault(tname, set()).add(cname)
+
+        fks: dict[str, list] = {}
+        cur.execute(
+            "SELECT cc.table_name, cc.column_name, rc.table_name FROM user_constraints c "
+            "JOIN user_cons_columns cc ON c.constraint_name = cc.constraint_name "
+            "JOIN user_constraints rc ON c.r_constraint_name = rc.constraint_name "
+            "WHERE c.constraint_type = 'R'"
+        )
+        for tname, cname, ref in cur.fetchall():
+            fks.setdefault(tname, []).append((cname, ref))
+
+        comments: dict[str, str] = {}
+        cur.execute("SELECT table_name, comments FROM user_tab_comments WHERE comments IS NOT NULL")
+        for tname, cmt in cur.fetchall():
+            comments[tname] = cmt
+
+    tables: list[Table] = []
+    for tname in sorted(cols):
+        columns = cols[tname]
+        for col in columns:
+            col.pk = col.name in pks.get(tname, set())
+        tables.append(
+            Table(tname, columns, comment=comments.get(tname, ""), foreign_keys=fks.get(tname, []))
+        )
+    return tables
+
+
+def render_auto_block(tables: list[Table]) -> str:
+    if not tables:
+        return "_(no tables visible to this connection)_"
+    parts: list[str] = []
+    for t in tables:
+        parts.append(f"### {t.name}")
+        if t.comment:
+            parts.append(f"\n{t.comment}")
+        parts.append("\n| column | type | null | key |")
+        parts.append("|---|---|---|---|")
+        for c in t.columns:
+            parts.append(f"| {c.name} | {c.type} | {'yes' if c.nullable else 'no'} | {'PK' if c.pk else ''} |")
+        if t.foreign_keys:
+            parts.append("\n_FKs: " + ", ".join(f"{col} → {ref}" for col, ref in t.foreign_keys) + "_")
+        parts.append("")
+    return "\n".join(parts).rstrip()
+
+
+def merge_tables_md(existing: str | None, generated: str, project_name: str = "project") -> str:
+    """Splice ``generated`` into the auto-block, preserving everything outside it.
+
+    - existing with markers → replace only between them (hand notes survive).
+    - existing without markers → append a fresh auto-block at the end.
+    - no file → create a header + auto-block.
+    """
+    block = f"{AUTO_START}\n{generated}\n{AUTO_END}"
+
+    if existing is None:
+        return (
+            f"# {project_name} — tables\n\n"
+            "Schema reference. The block below is generated by `wiseql context sync`; "
+            "add your own notes anywhere outside the markers — they are preserved.\n\n"
+            f"{block}\n"
+        )
+
+    if AUTO_START in existing and AUTO_END in existing:
+        pre, rest = existing.split(AUTO_START, 1)
+        _, post = rest.split(AUTO_END, 1)
+        return f"{pre}{block}{post}"
+
+    return f"{existing.rstrip()}\n\n{block}\n"
+
+
+def write_tables_md(path: Path, tables: list[Table], project_name: str = "project") -> Path:
+    """Merge the introspected schema into ``path`` (preserving notes) and write it."""
+    path = Path(path)
+    existing = path.read_text(encoding="utf-8") if path.exists() else None
+    merged = merge_tables_md(existing, render_auto_block(tables), project_name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(merged, encoding="utf-8")
+    return path
