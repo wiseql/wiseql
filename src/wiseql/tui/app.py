@@ -273,7 +273,11 @@ class WiseQLApp(App[None]):
             except (FileExistsError, OSError) as exc:
                 self.notify(str(exc), severity="error")
                 return
-            self.notify(f"Created project '{values['name']}' at {dest}")
+            self.notify(
+                f"Created '{values['name']}' at {dest} — cd into it and relaunch "
+                "WiseQL there to use F6/Ctrl+T and project-scoped runs.",
+                timeout=8,
+            )
 
         self.push_screen(ProjectWizard(), _create)
 
