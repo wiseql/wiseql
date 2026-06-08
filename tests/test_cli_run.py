@@ -64,9 +64,12 @@ def test_run_bad_param_exits_2(tmp_path: Path) -> None:
     assert "bad --param" in result.output
 
 
-def test_run_multiple_db_steps_needs_step_exits_1(tmp_path: Path) -> None:
+def test_run_single_local_step_rejected_exits_1(tmp_path: Path) -> None:
+    # --step on a local (DuckDB) step can't run standalone — needs the full recipe.
     result = runner.invoke(
-        app, ["run", str(EXAMPLES / "orphan-returns.toml")], env=_env(tmp_path)
+        app,
+        ["run", str(EXAMPLES / "orphan-returns.toml"), "--step", "orphans"],
+        env=_env(tmp_path),
     )
     assert result.exit_code == 1
-    assert "multiple database steps" in result.output
+    assert "full recipe" in result.output

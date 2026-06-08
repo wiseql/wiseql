@@ -15,7 +15,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from wiseql.config import get_backend
+from wiseql.config import open_connection
 from wiseql.config.model import Connection
 from wiseql.engine.guard import read_only_violation
 
@@ -53,32 +53,22 @@ def run_step(
     if violation:
         return _fail(f"read-only guard: {violation}")
 
-    try:
-        import oracledb
-    except ImportError:
-        return _fail("python-oracledb is not installed (run: make sync)")
-
-    password = get_backend(conn, environ=environ).get_password(conn_name, conn)
-    dsn = conn.dsn or (
-        f"{conn.host}:{conn.port}/{conn.service}" if conn.host and conn.service else None
-    )
-    if dsn is None:
-        return _fail("connection needs either 'dsn' or both 'host' and 'service'")
-
     started = time.perf_counter()
     try:
-        with oracledb.connect(user=conn.user, password=password, dsn=dsn) as connection:
-            with connection.cursor() as cur:
-                # Pin an ISO date format so string date binds (e.g. :run_date =
-                # "2026-01-01") are unambiguous regardless of the server's NLS
-                # default — otherwise a perfectly good query throws ORA-01861.
-                cur.execute("ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD'")
-                cur.execute(sql, params or {})
-                columns = [d[0] for d in cur.description]
-                # Fetch one past the cap so we can tell whether more existed.
-                fetched = cur.fetchmany(max_rows + 1)
+        connection = open_connection(conn_name, conn, environ=environ)
+    except Exception as exc:  # noqa: BLE001 — driver missing / connect failure
+        return _fail(str(exc).strip(), started)
+
+    try:
+        with connection.cursor() as cur:
+            cur.execute(sql, params or {})
+            columns = [d[0] for d in cur.description]
+            # Fetch one past the cap so we can tell whether more existed.
+            fetched = cur.fetchmany(max_rows + 1)
     except Exception as exc:  # noqa: BLE001 — surface any driver/DB error verbatim
         return _fail(str(exc).strip(), started)
+    finally:
+        connection.close()
 
     truncated = len(fetched) > max_rows
     rows = [tuple(r) for r in fetched[:max_rows]]

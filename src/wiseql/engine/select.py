@@ -32,7 +32,7 @@ def choose_step(result: LoadResult, step: str | None = None) -> tuple[StepChoice
         if not s.source:
             return None, (
                 f"step '{step}' is a local step (DuckDB over upstream outputs) — "
-                "multi-step execution arrives in Sprint 3"
+                "run the full recipe (omit --step) instead of a single step"
             )
         return StepChoice(step, result.resolved_sql.get(step, ""), s.source), None
 

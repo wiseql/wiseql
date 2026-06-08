@@ -80,7 +80,7 @@ def test_choose_rejects_local_step() -> None:
     loaded = load_recipe(EXAMPLES / "orphan-returns.toml")
     choice, why = choose_step(loaded, step="orphans")  # a local (inputs) step
     assert choice is None
-    assert "Sprint 3" in why
+    assert "full recipe" in why
 
 
 def test_choose_requires_step_when_multiple_db_steps() -> None:
