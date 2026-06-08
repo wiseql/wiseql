@@ -77,4 +77,4 @@ def test_cli_context_sync_outside_project_errors(tmp_path: Path, monkeypatch) ->
     empty.write_text("", encoding="utf-8")
     result = runner.invoke(app, ["context", "sync"], env={"WISEQL_CONFIG": str(empty)})
     assert result.exit_code == 1
-    assert "not in a project" in result.output
+    assert "not inside one" in result.output

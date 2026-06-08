@@ -75,9 +75,10 @@ class ConnectionsScreen(Screen[None]):
     ConnectionsScreen #conn-hint { padding: 0 1; color: $text-muted; }
     """
 
-    def __init__(self, config_path: Path | None = None) -> None:
+    def __init__(self, config_path: Path | None = None, project_path: Path | None = None) -> None:
         super().__init__()
         self._config_path = config_path
+        self._project_path = project_path  # active project's project.toml (its connections)
         self._config = WiseQLConfig()
         self._names: list[str] = []  # row order → connection name
 
@@ -98,7 +99,7 @@ class ConnectionsScreen(Screen[None]):
     # --- data ---------------------------------------------------------------
 
     def _reload(self) -> None:
-        result = load_active_config(self._config_path)
+        result = load_active_config(self._config_path, project_path=self._project_path)
         self._config = result.config
         table = self.query_one("#conn-table", DataTable)
         table.clear()

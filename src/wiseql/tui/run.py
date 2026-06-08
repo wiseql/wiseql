@@ -100,12 +100,16 @@ class RunScreen(Screen[None]):
     RunScreen #run-table { height: 1fr; }
     """
 
-    def __init__(self, loaded, config, params: dict | None = None, recipe_name: str = "recipe") -> None:
+    def __init__(
+        self, loaded, config, params: dict | None = None, recipe_name: str = "recipe",
+        runs_dir=None,
+    ) -> None:
         super().__init__()
         self._loaded = loaded
         self._config = config
         self._params = params or {}
         self._recipe_name = recipe_name
+        self._runs_dir = runs_dir  # None → run not persisted (no active project)
         self._names: list[str] = []
         self._result: RunResult | None = None
         self.status_text = ""
@@ -135,16 +139,12 @@ class RunScreen(Screen[None]):
 
     @work(thread=True)
     def _run_worker(self) -> None:
-        from pathlib import Path
-
-        from wiseql.project import find_project_root
-
         def on_step(name, step_run) -> None:
             self.app.call_from_thread(self._update_step, name, step_run)
 
-        runs_dir = (find_project_root() or Path.cwd()) / "runs"
         result = run_recipe(
-            self._loaded, self._config, params=self._params, on_step=on_step, runs_dir=runs_dir
+            self._loaded, self._config, params=self._params, on_step=on_step,
+            runs_dir=self._runs_dir,
         )
         self.app.call_from_thread(self._on_done, result)
 

@@ -107,6 +107,26 @@ def scaffold_project(
     return created
 
 
+def list_projects(projects_dir: Path) -> list[Path]:
+    """Project directories (those with a ``project.toml``) inside ``projects_dir``,
+    sorted by name. Missing folder → empty list."""
+    projects_dir = Path(projects_dir)
+    if not projects_dir.is_dir():
+        return []
+    return sorted(
+        (p for p in projects_dir.iterdir() if p.is_dir() and (p / PROJECT_MANIFEST).is_file()),
+        key=lambda p: p.name.lower(),
+    )
+
+
+def project_stats(project: Path) -> tuple[int, int]:
+    """(# recipe files, # run reports) for a project — for the projects list."""
+    project = Path(project)
+    recipes = len(list((project / "recipes").glob("*.toml"))) if (project / "recipes").is_dir() else 0
+    runs = len(list((project / "runs").glob("*/report.json"))) if (project / "runs").is_dir() else 0
+    return recipes, runs
+
+
 def find_project_root(start: Path | None = None) -> Path | None:
     """Nearest ancestor of ``start`` (inclusive) containing ``project.toml``,
     or None. The single source of truth for 'which project am I in' — used for

@@ -52,23 +52,45 @@ def init(
     connection: str = typer.Option(None, "--connection", "-c", help="Default connection name."),
     description: str = typer.Option("", "--description", "-d"),
 ) -> None:
-    """Scaffold a new WiseQL project directory."""
+    """Create a new project in the configured projects folder."""
     from wiseql.project import scaffold_project
 
-    dest = Path.cwd() / name
+    root = _load_config().config.projects_root
+    dest = root / name
     try:
-        created = scaffold_project(dest, name, description=description, connection=connection)
+        root.mkdir(parents=True, exist_ok=True)
+        scaffold_project(dest, name, description=description, connection=connection)
     except (FileExistsError, OSError) as exc:
         console.print(f"[bold red]cannot create project:[/] {exc}")
         raise typer.Exit(code=1)
 
     console.print(f"[green]✓[/] created project [b]{name}[/] at [dim]{dest}[/]")
-    for path in created:
-        console.print(f"    [dim]{path.relative_to(Path.cwd())}[/]")
     console.print(
-        f"\nNext: [b]cd {name}[/]  ·  add recipes to [b]recipes/[/]  ·  "
-        "[b]wiseql conn login[/]  ·  [b]wiseql context sync[/]"
+        f"\nNext: add recipes to [b]{dest}/recipes/[/]  ·  "
+        "open the TUI with [b]wiseql[/] (F7 to pick it)  ·  [b]wiseql context sync " + name + "[/]"
     )
+
+
+@app.command()
+def projects() -> None:
+    """List projects in the configured projects folder."""
+    from rich.table import Table
+
+    from wiseql.project import list_projects, project_stats
+
+    root = _load_config().config.projects_root
+    found = list_projects(root)
+    if not found:
+        console.print(f"No projects in [b]{root}[/]. Create one: [b]wiseql init <name>[/]")
+        return
+    table = Table(title=f"Projects in {root}")
+    table.add_column("project", style="bold")
+    table.add_column("recipes", justify="right")
+    table.add_column("runs", justify="right")
+    for path in found:
+        recipes, runs = project_stats(path)
+        table.add_row(path.name, str(recipes), str(runs))
+    console.print(table)
 
 
 @app.command()
@@ -177,7 +199,14 @@ def run(
     if step is not None:
         _run_single_step(loaded, config, step, params, max_rows)
     else:
-        _run_full_recipe(loaded, config, params, quiet=quiet, write_report=not no_report)
+        # Reports go to the project that CONTAINS the recipe (cwd-independent).
+        runs_dir = None
+        if not no_report:
+            from wiseql.project import find_project_root
+
+            root = find_project_root(recipe.resolve().parent)
+            runs_dir = (root / "runs") if root is not None else None
+        _run_full_recipe(loaded, config, params, quiet=quiet, runs_dir=runs_dir)
 
 
 def _run_single_step(loaded, config, step, params, max_rows) -> None:
@@ -209,13 +238,8 @@ def _run_single_step(loaded, config, step, params, max_rows) -> None:
     )
 
 
-def _run_full_recipe(loaded, config, params, *, quiet=False, write_report=True) -> None:
+def _run_full_recipe(loaded, config, params, *, quiet=False, runs_dir=None) -> None:
     from wiseql.engine import run_recipe
-    from wiseql.project import find_project_root
-
-    runs_dir = None
-    if write_report:
-        runs_dir = (find_project_root() or Path.cwd()) / "runs"
 
     result = run_recipe(loaded, config, params=params, runs_dir=runs_dir)
     if result.error:
@@ -253,6 +277,8 @@ def _run_full_recipe(loaded, config, params, *, quiet=False, write_report=True) 
         console.print(f"\n[b]run {verdict}[/][/] in {result.elapsed_ms} ms")
         if result.report_path:
             console.print(f"[dim]report: {result.report_path}[/]")
+        elif runs_dir is None:
+            console.print("[dim](recipe not in a project — no report written)[/]")
 
     if not result.ok:
         raise typer.Exit(code=1)
@@ -371,22 +397,31 @@ def conn_test(name: str | None = typer.Argument(None)) -> None:
 
 @context_app.command("sync")
 def context_sync(
+    project: str = typer.Argument(None, help="Project name (in the projects folder)."),
     connection: str = typer.Option(None, "--connection", "-c", help="Connection to introspect."),
 ) -> None:
-    """Introspect the database schema into context/tables.md (notes preserved)."""
-    from wiseql.config import open_connection
+    """Introspect the database schema into a project's context/tables.md (notes preserved)."""
+    from wiseql.config import load_active_config, open_connection
     from wiseql.context import introspect_tables, write_tables_md
     from wiseql.project import PROJECT_MANIFEST, find_project_root
 
-    root = find_project_root()
-    if root is None:
-        console.print(
-            "[bold red]not in a project[/] — run inside a project directory "
-            f"(one with {PROJECT_MANIFEST}), or create one with [b]wiseql init[/]."
-        )
-        raise typer.Exit(code=1)
+    base = _load_config().config
+    if project is not None:
+        root = base.projects_root / project
+        if not (root / PROJECT_MANIFEST).is_file():
+            console.print(f"[bold red]no such project:[/] {project} (in {base.projects_root})")
+            raise typer.Exit(code=1)
+    else:
+        root = find_project_root()
+        if root is None:
+            console.print(
+                "[bold red]no project given and not inside one[/] — pass a project name "
+                "([b]wiseql context sync <name>[/]) or run inside a project directory."
+            )
+            raise typer.Exit(code=1)
 
-    config = _load_config().config
+    # Scope connections/defaults to the target project.
+    config = load_active_config(project_path=root / PROJECT_MANIFEST).config
     name = config.resolve_name(connection)
     conn = config.connections.get(name) if name else None
     if conn is None:

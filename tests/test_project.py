@@ -64,18 +64,36 @@ def test_project_toml_feeds_config_layer(tmp_path: Path) -> None:
     assert result.config.defaults.connection == "oracle_dev"
 
 
-def test_cli_init_creates_project(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    result = runner.invoke(app, ["init", "demo", "--description", "a demo"])
+def _projects_env(tmp_path: Path) -> tuple[dict, Path]:
+    """A config pointing projects_dir at a tmp folder, so `init` never touches
+    the real ~/.wiseql/projects."""
+    pdir = tmp_path / "projects"
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(f'[defaults]\nprojects_dir = "{pdir}"\n', encoding="utf-8")
+    return {"WISEQL_CONFIG": str(cfg)}, pdir
+
+
+def test_cli_init_creates_in_projects_dir(tmp_path: Path) -> None:
+    env, pdir = _projects_env(tmp_path)
+    result = runner.invoke(app, ["init", "demo", "--description", "a demo"], env=env)
     assert result.exit_code == 0
-    assert (tmp_path / "demo" / "project.toml").is_file()
+    assert (pdir / "demo" / "project.toml").is_file()
     assert "created project" in result.output
 
 
-def test_cli_init_refuses_existing(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "demo").mkdir()
-    (tmp_path / "demo" / "f").write_text("x")
-    result = runner.invoke(app, ["init", "demo"])
+def test_cli_init_refuses_existing(tmp_path: Path) -> None:
+    env, pdir = _projects_env(tmp_path)
+    (pdir / "demo").mkdir(parents=True)
+    (pdir / "demo" / "f").write_text("x")
+    result = runner.invoke(app, ["init", "demo"], env=env)
     assert result.exit_code == 1
     assert "cannot create project" in result.output
+
+
+def test_cli_projects_lists(tmp_path: Path) -> None:
+    env, pdir = _projects_env(tmp_path)
+    scaffold_project(pdir / "alpha", "alpha")
+    scaffold_project(pdir / "beta", "beta")
+    result = runner.invoke(app, ["projects"], env=env)
+    assert result.exit_code == 0
+    assert "alpha" in result.output and "beta" in result.output
