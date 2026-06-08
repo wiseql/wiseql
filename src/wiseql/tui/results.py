@@ -31,10 +31,13 @@ class ResultsScreen(Screen[None]):
     ResultsScreen #result-grid { height: 1fr; }
     """
 
-    def __init__(self, choice: StepChoice, conn: Connection) -> None:
+    def __init__(
+        self, choice: StepChoice, conn: Connection, params: dict | None = None
+    ) -> None:
         super().__init__()
         self._choice = choice
         self._conn = conn
+        self._params = params or {}
         self.status_text = ""  # mirror of the status line, exposed for tests
 
     def _status(self, markup: str) -> None:
@@ -56,7 +59,7 @@ class ResultsScreen(Screen[None]):
 
     @work(thread=True)
     def _run_worker(self) -> None:
-        result = run_step(self._choice.source, self._conn, self._choice.sql)
+        result = run_step(self._choice.source, self._conn, self._choice.sql, params=self._params)
         self.app.call_from_thread(self._show, result)
 
     def _show(self, result: StepResult) -> None:

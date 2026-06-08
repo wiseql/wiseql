@@ -209,23 +209,12 @@ class WiseQLApp(App[None]):
     def action_run(self) -> None:
         from wiseql.config import load_active_config
         from wiseql.engine import choose_step
-        from wiseql.tui.results import ResultsScreen
 
         if self._current is None or self._current.recipe is None:
             return
         choice, why = choose_step(self._current)
         if choice is None:
             self.notify(why or "cannot run", severity="warning")
-            return
-        params = self._current.recipe.recipe.params
-        if params:
-            # Parameter prompt form is Sprint 3.2; until then, the headless CLI
-            # (`wiseql run --param`) handles parameterised recipes.
-            self.notify(
-                f"'{self._current.recipe.recipe.name}' needs params ({', '.join(params)}); "
-                "TUI prompt arrives in Sprint 3.2 — use `wiseql run --param` for now",
-                severity="warning",
-            )
             return
         config = load_active_config(self.config_path).config
         conn = config.connections.get(choice.source)
@@ -235,7 +224,23 @@ class WiseQLApp(App[None]):
                 severity="error",
             )
             return
-        self.push_screen(ResultsScreen(choice, conn))
+
+        declared = self._current.recipe.recipe.params
+        if declared:
+            from wiseql.tui.params import ParamModal
+
+            def _got(values: dict | None) -> None:
+                if values is not None:
+                    self._launch_results(choice, conn, values)
+
+            self.push_screen(ParamModal(self._current.recipe.recipe.name, declared), _got)
+        else:
+            self._launch_results(choice, conn, {})
+
+    def _launch_results(self, choice, conn, params: dict) -> None:
+        from wiseql.tui.results import ResultsScreen
+
+        self.push_screen(ResultsScreen(choice, conn, params))
 
     def action_validate(self) -> None:
         list_view = self.query_one("#recipe-list", ListView)

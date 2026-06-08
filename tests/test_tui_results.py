@@ -7,6 +7,7 @@ from textual.widgets import DataTable
 
 from wiseql.engine import StepResult
 from wiseql.tui.app import WiseQLApp
+from wiseql.tui.params import ParamModal
 from wiseql.tui.results import ResultsScreen
 
 EXAMPLES = Path(__file__).parent.parent / "examples"
@@ -72,24 +73,52 @@ async def test_f2_shows_error_on_failure(tmp_path: Path, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_f2_warns_for_parameterised_recipe(tmp_path: Path, monkeypatch) -> None:
-    # null-customers declares params → F2 should warn, not push a results screen
-    called = False
+async def test_f2_parameterised_recipe_prompts_then_runs(tmp_path: Path, monkeypatch) -> None:
+    # null-customers declares run_date → F2 opens the param modal; the entered
+    # value must reach run_step as a bind parameter.
+    captured: dict = {}
 
-    def _boom(*a, **k):
-        nonlocal called
-        called = True
-        return StepResult(ok=True)
+    def _capture(source, conn, sql, *, params=None, **k):
+        captured["params"] = params
+        return StepResult(ok=True, columns=["X"], rows=[(1,)], row_count=1)
 
-    monkeypatch.setattr("wiseql.tui.results.run_step", _boom)
+    monkeypatch.setattr("wiseql.tui.results.run_step", _capture)
     app = _app(tmp_path)
     async with app.run_test() as pilot:
         app._show(EXAMPLES / "null-customers.toml")
         await pilot.pause()
         await pilot.press("f2")
         await pilot.pause()
+        assert isinstance(app.screen, ParamModal)
+        await pilot.press(*list("20260510"))  # type into the run_date input
+        await pilot.press("enter")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert isinstance(app.screen, ResultsScreen)
+        assert captured["params"] == {"run_date": "20260510"}
+
+
+@pytest.mark.asyncio
+async def test_f2_param_modal_cancel_does_not_run(tmp_path: Path, monkeypatch) -> None:
+    ran = False
+
+    def _mark(*a, **k):
+        nonlocal ran
+        ran = True
+        return StepResult(ok=True)
+
+    monkeypatch.setattr("wiseql.tui.results.run_step", _mark)
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app._show(EXAMPLES / "null-customers.toml")
+        await pilot.pause()
+        await pilot.press("f2")
+        await pilot.pause()
+        assert isinstance(app.screen, ParamModal)
+        await pilot.press("escape")
+        await pilot.pause()
         assert not isinstance(app.screen, ResultsScreen)
-        assert called is False
+        assert ran is False
 
 
 @pytest.mark.asyncio
