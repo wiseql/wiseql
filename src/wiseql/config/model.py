@@ -10,9 +10,13 @@ password lives in an auth backend (keyring / env / wallet); see ``auth.py``.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+# Where projects live when the config doesn't say otherwise.
+DEFAULT_PROJECTS_DIR = "~/.wiseql/projects"
 
 Driver = Literal["oracle"]  # PostgreSQL arrives in a later sprint
 AuthMethod = Literal["keyring", "env", "wallet"]
@@ -49,6 +53,9 @@ class Defaults(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     connection: str | None = None
+    # Folder holding all WiseQL projects. The app lists/creates projects here,
+    # independent of the working directory. ``~`` is expanded.
+    projects_dir: str | None = None
 
 
 class WiseQLConfig(BaseModel):
@@ -64,3 +71,8 @@ class WiseQLConfig(BaseModel):
         """The connection name to use: explicit ``name`` or the configured
         default. Returns None if neither is available."""
         return name or self.defaults.connection
+
+    @property
+    def projects_root(self) -> Path:
+        """The (expanded) folder holding all projects — config value or default."""
+        return Path(self.defaults.projects_dir or DEFAULT_PROJECTS_DIR).expanduser()

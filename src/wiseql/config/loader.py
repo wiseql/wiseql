@@ -144,7 +144,23 @@ def active_global_path(explicit: Path | None = None) -> Path | None:
     return None
 
 
-def load_active_config(global_path: Path | None = None, **kwargs) -> ConfigResult:
+def load_active_config(
+    global_path: Path | None = None, *, cwd: Path | None = None, **kwargs
+) -> ConfigResult:
     """``load_config`` with the global path resolved from an override or
-    ``$WISEQL_CONFIG``. Shared entry point for the CLI and TUI."""
-    return load_config(global_path=active_global_path(global_path), **kwargs)
+    ``$WISEQL_CONFIG``, and the project layer discovered by walking up from
+    ``cwd`` to the nearest ``project.toml`` (same root rule used for ``runs/``).
+    Shared entry point for the CLI and TUI."""
+    from wiseql.project import PROJECT_MANIFEST, find_project_root
+
+    project_path = kwargs.pop("project_path", None)
+    if project_path is None:
+        root = find_project_root(cwd)
+        if root is not None:
+            project_path = root / PROJECT_MANIFEST
+    return load_config(
+        global_path=active_global_path(global_path),
+        project_path=project_path,
+        cwd=cwd,
+        **kwargs,
+    )

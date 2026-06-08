@@ -24,6 +24,9 @@ app = typer.Typer(
 conn_app = typer.Typer(help="Manage database connections (list, login, test).")
 app.add_typer(conn_app, name="conn")
 
+context_app = typer.Typer(help="Project context (schema sync).")
+app.add_typer(context_app, name="context")
+
 console = Console()
 _SEVERITY_STYLE = {"error": "bold red", "warning": "yellow"}
 
@@ -41,6 +44,53 @@ def _root(ctx: typer.Context) -> None:
 def version() -> None:
     """Print the WiseQL version and exit."""
     typer.echo(f"WiseQL {__version__}")
+
+
+@app.command()
+def init(
+    name: str,
+    connection: str = typer.Option(None, "--connection", "-c", help="Default connection name."),
+    description: str = typer.Option("", "--description", "-d"),
+) -> None:
+    """Create a new project in the configured projects folder."""
+    from wiseql.project import scaffold_project
+
+    root = _load_config().config.projects_root
+    dest = root / name
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        scaffold_project(dest, name, description=description, connection=connection)
+    except (FileExistsError, OSError) as exc:
+        console.print(f"[bold red]cannot create project:[/] {exc}")
+        raise typer.Exit(code=1)
+
+    console.print(f"[green]✓[/] created project [b]{name}[/] at [dim]{dest}[/]")
+    console.print(
+        f"\nNext: add recipes to [b]{dest}/recipes/[/]  ·  "
+        "open the TUI with [b]wiseql[/] (F7 to pick it)  ·  [b]wiseql context sync " + name + "[/]"
+    )
+
+
+@app.command()
+def projects() -> None:
+    """List projects in the configured projects folder."""
+    from rich.table import Table
+
+    from wiseql.project import list_projects, project_stats
+
+    root = _load_config().config.projects_root
+    found = list_projects(root)
+    if not found:
+        console.print(f"No projects in [b]{root}[/]. Create one: [b]wiseql init <name>[/]")
+        return
+    table = Table(title=f"Projects in {root}")
+    table.add_column("project", style="bold")
+    table.add_column("recipes", justify="right")
+    table.add_column("runs", justify="right")
+    for path in found:
+        recipes, runs = project_stats(path)
+        table.add_row(path.name, str(recipes), str(runs))
+    console.print(table)
 
 
 @app.command()
@@ -130,15 +180,18 @@ def run(
     step: str = typer.Option(None, "--step", "-s", help="Run only this one database step."),
     param: list[str] = typer.Option(None, "--param", "-p", help="Bind value, key=value."),
     max_rows: int = typer.Option(1000, help="Cap on rows fetched (single-step mode)."),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="No output; just exit code + report (cron)."),
+    no_report: bool = typer.Option(False, "--no-report", help="Don't persist a run report."),
 ) -> None:
     """Run a recipe end-to-end through DuckDB (or one step with --step)."""
     from wiseql.recipes import load_recipe
 
     loaded = load_recipe(recipe)
     if not loaded.ok:
-        console.print(f"[bold red]invalid recipe:[/] {recipe}")
-        for issue in loaded.errors:
-            console.print(f"    [red]{issue}[/]")
+        if not quiet:
+            console.print(f"[bold red]invalid recipe:[/] {recipe}")
+            for issue in loaded.errors:
+                console.print(f"    [red]{issue}[/]")
         raise typer.Exit(code=1)
 
     params = _parse_params(param)
@@ -146,7 +199,14 @@ def run(
     if step is not None:
         _run_single_step(loaded, config, step, params, max_rows)
     else:
-        _run_full_recipe(loaded, config, params)
+        # Reports go to the project that CONTAINS the recipe (cwd-independent).
+        runs_dir = None
+        if not no_report:
+            from wiseql.project import find_project_root
+
+            root = find_project_root(recipe.resolve().parent)
+            runs_dir = (root / "runs") if root is not None else None
+        _run_full_recipe(loaded, config, params, quiet=quiet, runs_dir=runs_dir)
 
 
 def _run_single_step(loaded, config, step, params, max_rows) -> None:
@@ -178,43 +238,48 @@ def _run_single_step(loaded, config, step, params, max_rows) -> None:
     )
 
 
-def _run_full_recipe(loaded, config, params) -> None:
+def _run_full_recipe(loaded, config, params, *, quiet=False, runs_dir=None) -> None:
     from wiseql.engine import run_recipe
 
-    result = run_recipe(loaded, config, params=params)
+    result = run_recipe(loaded, config, params=params, runs_dir=runs_dir)
     if result.error:
-        console.print(f"[bold red]cannot run:[/] {result.error}")
+        if not quiet:
+            console.print(f"[bold red]cannot run:[/] {result.error}")
         raise typer.Exit(code=1)
 
-    for s in result.steps:
-        where = s.source or "duckdb"
-        if s.ok:
-            console.print(
-                f"[green]✓[/] [b]{s.name}[/] [dim]({s.kind} · {where})[/] — "
-                f"{s.row_count} row(s) in {s.elapsed_ms} ms"
-            )
-        else:
-            console.print(f"[bold red]✗ {s.name}[/] [dim]({s.kind} · {where})[/] — {s.error}")
-        for a in s.assertions:
-            from rich.markup import escape
+    if not quiet:
+        from rich.markup import escape
 
-            mark = "[green]✓[/]" if a.passed else f"[bold red]✗[/] [dim]({s.on_fail})[/]"
-            console.print(f"      {mark} assert {escape(a.check)}: {escape(a.detail)}")
-            if not a.passed and a.samples:
-                _print_rows(a.sample_columns, a.samples)
+        for s in result.steps:
+            where = s.source or "duckdb"
+            if s.ok:
+                console.print(
+                    f"[green]✓[/] [b]{s.name}[/] [dim]({s.kind} · {where})[/] — "
+                    f"{s.row_count} row(s) in {s.elapsed_ms} ms"
+                )
+            else:
+                console.print(f"[bold red]✗ {s.name}[/] [dim]({s.kind} · {where})[/] — {s.error}")
+            for a in s.assertions:
+                mark = "[green]✓[/]" if a.passed else f"[bold red]✗[/] [dim]({s.on_fail})[/]"
+                console.print(f"      {mark} assert {escape(a.check)}: {escape(a.detail)}")
+                if not a.passed and a.samples:
+                    _print_rows(a.sample_columns, a.samples)
 
-    for name in result.terminals:
-        s = result.step(name)
-        if s is not None and s.ok:
-            console.print(f"\n[b]{name}[/] [dim](result)[/]:")
-            _print_rows(s.columns, s.sample)
-            if s.row_count > len(s.sample):
-                console.print(f"[dim]… {s.row_count - len(s.sample)} more row(s)[/]")
+        for name in result.terminals:
+            s = result.step(name)
+            if s is not None and s.ok:
+                console.print(f"\n[b]{name}[/] [dim](result)[/]:")
+                _print_rows(s.columns, s.sample)
+                if s.row_count > len(s.sample):
+                    console.print(f"[dim]… {s.row_count - len(s.sample)} more row(s)[/]")
 
-    console.print(
-        f"\n[b]run {'[green]✓ ok' if result.ok else '[bold red]✗ failed'}[/][/] "
-        f"in {result.elapsed_ms} ms"
-    )
+        verdict = "[green]✓ ok" if result.ok else "[bold red]✗ failed"
+        console.print(f"\n[b]run {verdict}[/][/] in {result.elapsed_ms} ms")
+        if result.report_path:
+            console.print(f"[dim]report: {result.report_path}[/]")
+        elif runs_dir is None:
+            console.print("[dim](recipe not in a project — no report written)[/]")
+
     if not result.ok:
         raise typer.Exit(code=1)
 
@@ -328,6 +393,54 @@ def conn_test(name: str | None = typer.Argument(None)) -> None:
     else:
         console.print(f"[bold red]✗ failed[/] after {outcome.elapsed_ms} ms — {outcome.detail}")
         raise typer.Exit(code=1)
+
+
+@context_app.command("sync")
+def context_sync(
+    project: str = typer.Argument(None, help="Project name (in the projects folder)."),
+    connection: str = typer.Option(None, "--connection", "-c", help="Connection to introspect."),
+) -> None:
+    """Introspect the database schema into a project's context/tables.md (notes preserved)."""
+    from wiseql.config import load_active_config, open_connection
+    from wiseql.context import introspect_tables, write_tables_md
+    from wiseql.project import PROJECT_MANIFEST, find_project_root
+
+    base = _load_config().config
+    if project is not None:
+        root = base.projects_root / project
+        if not (root / PROJECT_MANIFEST).is_file():
+            console.print(f"[bold red]no such project:[/] {project} (in {base.projects_root})")
+            raise typer.Exit(code=1)
+    else:
+        root = find_project_root()
+        if root is None:
+            console.print(
+                "[bold red]no project given and not inside one[/] — pass a project name "
+                "([b]wiseql context sync <name>[/]) or run inside a project directory."
+            )
+            raise typer.Exit(code=1)
+
+    # Scope connections/defaults to the target project.
+    config = load_active_config(project_path=root / PROJECT_MANIFEST).config
+    name = config.resolve_name(connection)
+    conn = config.connections.get(name) if name else None
+    if conn is None:
+        console.print(f"[bold red]unknown or unset connection:[/] {name or '(none)'}")
+        raise typer.Exit(code=1)
+
+    console.print(f"Introspecting [b]{name}[/] [dim]{conn.target}[/dim] …")
+    try:
+        connection_obj = open_connection(name, conn)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[bold red]✗ connect failed:[/] {str(exc).strip()}")
+        raise typer.Exit(code=1)
+    try:
+        tables = introspect_tables(connection_obj)
+    finally:
+        connection_obj.close()
+
+    path = write_tables_md(root / "context" / "tables.md", tables, project_name=root.name)
+    console.print(f"[green]✓[/] synced {len(tables)} table(s) → [dim]{path}[/]")
 
 
 def main() -> None:

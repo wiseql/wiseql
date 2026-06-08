@@ -100,12 +100,16 @@ class RunScreen(Screen[None]):
     RunScreen #run-table { height: 1fr; }
     """
 
-    def __init__(self, loaded, config, params: dict | None = None, recipe_name: str = "recipe") -> None:
+    def __init__(
+        self, loaded, config, params: dict | None = None, recipe_name: str = "recipe",
+        runs_dir=None,
+    ) -> None:
         super().__init__()
         self._loaded = loaded
         self._config = config
         self._params = params or {}
         self._recipe_name = recipe_name
+        self._runs_dir = runs_dir  # None → run not persisted (no active project)
         self._names: list[str] = []
         self._result: RunResult | None = None
         self.status_text = ""
@@ -139,7 +143,8 @@ class RunScreen(Screen[None]):
             self.app.call_from_thread(self._update_step, name, step_run)
 
         result = run_recipe(
-            self._loaded, self._config, params=self._params, on_step=on_step
+            self._loaded, self._config, params=self._params, on_step=on_step,
+            runs_dir=self._runs_dir,
         )
         self.app.call_from_thread(self._on_done, result)
 
