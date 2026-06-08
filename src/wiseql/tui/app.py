@@ -18,6 +18,7 @@ from wiseql import __version__
 from wiseql.ai import get_provider
 from wiseql.recipes import LoadResult, build_plan, load_recipe
 from wiseql.recipes.dag import describe_step
+from wiseql.tui.theme import THEME
 
 HELP_TEXT = f"""\
 [b]WiseQL v{__version__} — Help[/b]
@@ -84,6 +85,9 @@ class WiseQLApp(App[None]):
 
     TITLE = "WiseQL"
     SUB_TITLE = "the wise data browser"
+
+    # Shared spacing/structure theme, cascaded to every screen.
+    CSS = THEME
 
     BINDINGS = [
         Binding("f1", "help", "Help"),
