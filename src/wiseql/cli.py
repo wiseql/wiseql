@@ -195,6 +195,13 @@ def _run_full_recipe(loaded, config, params) -> None:
             )
         else:
             console.print(f"[bold red]✗ {s.name}[/] [dim]({s.kind} · {where})[/] — {s.error}")
+        for a in s.assertions:
+            from rich.markup import escape
+
+            mark = "[green]✓[/]" if a.passed else f"[bold red]✗[/] [dim]({s.on_fail})[/]"
+            console.print(f"      {mark} assert {escape(a.check)}: {escape(a.detail)}")
+            if not a.passed and a.samples:
+                _print_rows(a.sample_columns, a.samples)
 
     for name in result.terminals:
         s = result.step(name)

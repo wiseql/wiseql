@@ -12,8 +12,9 @@ import duckdb
 
 from wiseql.config import WiseQLConfig
 from wiseql.engine import run_recipe
-from wiseql.engine.execute import _run_local_step
+from wiseql.engine.execute import StepRun, _evaluate_assertions, _run_local_step
 from wiseql.recipes import load_recipe
+from wiseql.recipes.model import StepAssert
 
 BROKEN = Path(__file__).parent / "fixtures" / "broken"
 
@@ -83,3 +84,73 @@ def test_local_step_materializes_table_for_downstream() -> None:
     # the step's output is now a real table a downstream step could read
     assert duck.execute("SELECT SUM(n2) FROM doubled").fetchone()[0] == 60
     duck.close()
+
+
+# --- assertions (seeded DuckDB; no Oracle) ----------------------------------
+
+
+def _seed_assert(create_sql: str, spec: StepAssert, prior=None) -> StepRun:
+    duck = duckdb.connect()
+    duck.execute(f"CREATE TABLE t AS {create_sql}")
+    run = StepRun(name="t", kind="local", source=None, ok=True)
+    run.row_count = duck.execute("SELECT COUNT(*) FROM t").fetchone()[0]
+    _evaluate_assertions(duck, run, spec, prior or [])
+    duck.close()
+    return run
+
+
+def test_assert_no_nulls_is_case_insensitive() -> None:
+    # THE discriminating test: lowercase assertion column vs UPPERCASE table column
+    # (as Oracle returns them). Must find the 1 planted NULL — not silently pass.
+    run = _seed_assert(
+        'SELECT * FROM (VALUES (1,5),(2,NULL),(3,7)) v("ORDER_ID","CUSTOMER_ID")',
+        StepAssert(no_nulls=["customer_id"]),
+    )
+    a = run.assertions[0]
+    assert a.passed is False
+    assert "1 row" in a.detail
+    assert len(a.samples) == 1
+
+
+def test_assert_no_nulls_passes_when_clean() -> None:
+    run = _seed_assert(
+        'SELECT * FROM (VALUES (1,5),(2,6)) v("ORDER_ID","CUSTOMER_ID")',
+        StepAssert(no_nulls=["customer_id"]),
+    )
+    assert run.assertions[0].passed is True
+
+
+def test_assert_unique_detects_duplicates() -> None:
+    run = _seed_assert(
+        'SELECT * FROM (VALUES (1),(2),(2),(2)) v("ORDER_ID")',
+        StepAssert(unique=["order_id"]),
+    )
+    a = run.assertions[0]
+    assert a.passed is False
+    assert "1 duplicated key" in a.detail
+    # the duplicated key (2) with its occurrence count is captured
+    assert a.samples and a.samples[0][0] == 2
+
+
+def test_assert_rows_min_and_max() -> None:
+    run = _seed_assert(
+        "SELECT * FROM (VALUES (1),(2),(3)) v(n)",
+        StepAssert(rows_min=5, rows_max=2),
+    )
+    assert [a.passed for a in run.assertions] == [False, False]
+
+
+def test_assert_equals_step() -> None:
+    prior = [StepRun(name="orders", kind="db", source="x", ok=True, row_count=3)]
+    run = _seed_assert(
+        "SELECT * FROM (VALUES (1),(2)) v(n)",  # 2 rows
+        StepAssert(equals_step="orders"),  # orders has 3 → mismatch
+        prior=prior,
+    )
+    assert run.assertions[0].passed is False
+    assert "2 vs orders=3" in run.assertions[0].detail
+
+
+def test_assert_failed_property() -> None:
+    run = _seed_assert("SELECT * FROM (VALUES (1)) v(n)", StepAssert(rows_min=99))
+    assert run.assert_failed is True

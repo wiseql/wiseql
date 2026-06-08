@@ -29,6 +29,16 @@ from wiseql.engine.guard import read_only_violation
 from wiseql.recipes import LoadResult, build_plan
 
 DEFAULT_SAMPLE_ROWS = 50
+ASSERT_SAMPLE_ROWS = 20  # offending rows captured per failed assertion
+
+
+@dataclass
+class AssertionOutcome:
+    check: str  # e.g. "no_nulls[customer_id]"
+    passed: bool
+    detail: str = ""
+    sample_columns: list[str] = field(default_factory=list)
+    samples: list[tuple] = field(default_factory=list)  # offending rows (report_samples)
 
 
 @dataclass
@@ -36,12 +46,18 @@ class StepRun:
     name: str
     kind: str  # "db" | "local"
     source: str | None
-    ok: bool
+    ok: bool  # executed without error
     columns: list[str] = field(default_factory=list)
     sample: list[tuple] = field(default_factory=list)  # capped preview
     row_count: int = 0  # total rows produced in DuckDB
     elapsed_ms: float = 0.0
     error: str = ""
+    assertions: list[AssertionOutcome] = field(default_factory=list)
+    on_fail: str = "stop"  # policy from the recipe, echoed for display
+
+    @property
+    def assert_failed(self) -> bool:
+        return any(not a.passed for a in self.assertions)
 
 
 @dataclass
@@ -127,10 +143,19 @@ def run_recipe(
                 break
 
             self_run.elapsed_ms = _ms(started)
+            if self_run.ok and step.assert_ is not None:
+                self_run.on_fail = step.assert_.on_fail
+                _evaluate_assertions(duck, self_run, step.assert_, result.steps)
             result.steps.append(self_run)
+
             if not self_run.ok:
                 result.ok = False
                 break
+            if self_run.assert_failed and self_run.on_fail != "warn":
+                # stop + report_samples are real failures; only stop halts the run.
+                result.ok = False
+                if self_run.on_fail == "stop":
+                    break
     finally:
         for conn in oracle_conns.values():
             try:
@@ -177,6 +202,75 @@ def _run_local_step(duck, name, inputs, sql) -> StepRun:
     # step's SQL references them directly (e.g. FROM orders, FROM returns).
     duck.execute(f"CREATE TABLE {_ident(name)} AS {sql}")
     return _collect(duck, run)
+
+
+def _evaluate_assertions(duck, run: StepRun, spec, prior_steps: list[StepRun]) -> None:
+    """Check a step's assertions as SQL against its DuckDB table.
+
+    Column names come from the recipe in lowercase while Oracle-sourced tables
+    carry UPPERCASE names — DuckDB resolves quoted identifiers case-insensitively,
+    so ``"customer_id"`` matches ``CUSTOMER_ID``. Doing the checks in SQL (not
+    Python name-matching) is what makes that work.
+    """
+    t = _ident(run.name)
+    out: list[AssertionOutcome] = []
+
+    if spec.rows_min is not None:
+        ok = run.row_count >= spec.rows_min
+        out.append(AssertionOutcome("rows_min", ok, f"{run.row_count} rows (min {spec.rows_min})"))
+
+    if spec.rows_max is not None:
+        ok = run.row_count <= spec.rows_max
+        out.append(AssertionOutcome("rows_max", ok, f"{run.row_count} rows (max {spec.rows_max})"))
+
+    if spec.no_nulls:
+        cond = " OR ".join(f"{_ident(c)} IS NULL" for c in spec.no_nulls)
+        n = duck.execute(f"SELECT COUNT(*) FROM {t} WHERE {cond}").fetchone()[0]
+        cur = duck.execute(f"SELECT * FROM {t} WHERE {cond} LIMIT {ASSERT_SAMPLE_ROWS}")
+        samples = cur.fetchall() if n else []
+        cols = [d[0] for d in cur.description] if n else []
+        label = ", ".join(spec.no_nulls)
+        out.append(AssertionOutcome(f"no_nulls[{label}]", n == 0, f"{n} row(s) with NULL", cols, samples))
+
+    if spec.unique:
+        cols_sql = ", ".join(_ident(c) for c in spec.unique)
+        cur = duck.execute(
+            f"SELECT {cols_sql}, COUNT(*) AS occurrences FROM {t} "
+            f"GROUP BY {cols_sql} HAVING COUNT(*) > 1 ORDER BY occurrences DESC "
+            f"LIMIT {ASSERT_SAMPLE_ROWS}"
+        )
+        dups = cur.fetchall()
+        dcols = [d[0] for d in cur.description]
+        total = duck.execute(
+            f"SELECT COUNT(*) FROM (SELECT 1 FROM {t} GROUP BY {cols_sql} HAVING COUNT(*) > 1)"
+        ).fetchone()[0]
+        label = ", ".join(spec.unique)
+        out.append(
+            AssertionOutcome(
+                f"unique[{label}]", total == 0, f"{total} duplicated key(s)", dcols if dups else [], dups
+            )
+        )
+
+    if spec.equals_step:
+        other = next((s for s in prior_steps if s.name == spec.equals_step), None)
+        other_count = other.row_count if other is not None else None
+        if other_count is None:
+            out.append(
+                AssertionOutcome(
+                    f"equals_step[{spec.equals_step}]", False,
+                    f"step '{spec.equals_step}' not found among prior steps",
+                )
+            )
+        else:
+            out.append(
+                AssertionOutcome(
+                    f"equals_step[{spec.equals_step}]",
+                    run.row_count == other_count,
+                    f"{run.row_count} vs {spec.equals_step}={other_count}",
+                )
+            )
+
+    run.assertions = out
 
 
 def _collect(duck, run: StepRun, sample_rows: int = DEFAULT_SAMPLE_ROWS) -> StepRun:
