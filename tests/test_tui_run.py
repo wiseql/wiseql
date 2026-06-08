@@ -36,7 +36,7 @@ def _orphan_steps() -> list[StepRun]:
 
 
 def _fake_run(steps, *, ok, capture=None):
-    def _run(loaded, config, *, params=None, environ=None, on_step=None):
+    def _run(loaded, config, *, params=None, environ=None, on_step=None, runs_dir=None):
         if capture is not None:
             capture["params"] = params
         if on_step:

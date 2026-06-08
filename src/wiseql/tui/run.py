@@ -135,11 +135,16 @@ class RunScreen(Screen[None]):
 
     @work(thread=True)
     def _run_worker(self) -> None:
+        from pathlib import Path
+
+        from wiseql.project import find_project_root
+
         def on_step(name, step_run) -> None:
             self.app.call_from_thread(self._update_step, name, step_run)
 
+        runs_dir = (find_project_root() or Path.cwd()) / "runs"
         result = run_recipe(
-            self._loaded, self._config, params=self._params, on_step=on_step
+            self._loaded, self._config, params=self._params, on_step=on_step, runs_dir=runs_dir
         )
         self.app.call_from_thread(self._on_done, result)
 

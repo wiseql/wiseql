@@ -67,6 +67,7 @@ class RunResult:
     terminals: list[str] = field(default_factory=list)  # result steps (consumed by nobody)
     elapsed_ms: float = 0.0
     error: str = ""  # run-level failure (e.g. invalid plan)
+    report_path: str | None = None  # set when the run was persisted (S4.2)
 
     def step(self, name: str) -> StepRun | None:
         return next((s for s in self.steps if s.name == name), None)
@@ -95,6 +96,7 @@ def run_recipe(
     params: dict | None = None,
     environ=None,
     on_step=None,
+    runs_dir=None,
 ) -> RunResult:
     """Execute every step of a recipe through DuckDB and return per-step results.
 
@@ -104,7 +106,15 @@ def run_recipe(
     ``on_step(name, step_run)`` is an optional progress callback: called with
     ``step_run=None`` when a step starts running, and with the completed
     ``StepRun`` when it finishes — so a live UI can light up the DAG.
+
+    If ``runs_dir`` is given, the run is persisted to
+    ``runs_dir/<timestamp>/report.json`` and ``result.report_path`` is set — so
+    CLI and TUI runs both produce reports from this one place.
     """
+    from datetime import datetime
+
+    started_at = datetime.now()
+
     def _notify(name, step_run) -> None:
         if on_step is not None:
             on_step(name, step_run)
@@ -175,6 +185,14 @@ def run_recipe(
         duck.close()
 
     result.elapsed_ms = _ms(run_start)
+
+    if runs_dir is not None:
+        from wiseql.report import write_report
+
+        recipe_name = recipe.recipe.name
+        path = write_report(runs_dir, result, recipe_name, params or {}, started_at)
+        result.report_path = str(path)
+
     return result
 
 

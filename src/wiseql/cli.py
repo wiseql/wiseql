@@ -155,15 +155,18 @@ def run(
     step: str = typer.Option(None, "--step", "-s", help="Run only this one database step."),
     param: list[str] = typer.Option(None, "--param", "-p", help="Bind value, key=value."),
     max_rows: int = typer.Option(1000, help="Cap on rows fetched (single-step mode)."),
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="No output; just exit code + report (cron)."),
+    no_report: bool = typer.Option(False, "--no-report", help="Don't persist a run report."),
 ) -> None:
     """Run a recipe end-to-end through DuckDB (or one step with --step)."""
     from wiseql.recipes import load_recipe
 
     loaded = load_recipe(recipe)
     if not loaded.ok:
-        console.print(f"[bold red]invalid recipe:[/] {recipe}")
-        for issue in loaded.errors:
-            console.print(f"    [red]{issue}[/]")
+        if not quiet:
+            console.print(f"[bold red]invalid recipe:[/] {recipe}")
+            for issue in loaded.errors:
+                console.print(f"    [red]{issue}[/]")
         raise typer.Exit(code=1)
 
     params = _parse_params(param)
@@ -171,7 +174,7 @@ def run(
     if step is not None:
         _run_single_step(loaded, config, step, params, max_rows)
     else:
-        _run_full_recipe(loaded, config, params)
+        _run_full_recipe(loaded, config, params, quiet=quiet, write_report=not no_report)
 
 
 def _run_single_step(loaded, config, step, params, max_rows) -> None:
@@ -203,43 +206,51 @@ def _run_single_step(loaded, config, step, params, max_rows) -> None:
     )
 
 
-def _run_full_recipe(loaded, config, params) -> None:
+def _run_full_recipe(loaded, config, params, *, quiet=False, write_report=True) -> None:
     from wiseql.engine import run_recipe
+    from wiseql.project import find_project_root
 
-    result = run_recipe(loaded, config, params=params)
+    runs_dir = None
+    if write_report:
+        runs_dir = (find_project_root() or Path.cwd()) / "runs"
+
+    result = run_recipe(loaded, config, params=params, runs_dir=runs_dir)
     if result.error:
-        console.print(f"[bold red]cannot run:[/] {result.error}")
+        if not quiet:
+            console.print(f"[bold red]cannot run:[/] {result.error}")
         raise typer.Exit(code=1)
 
-    for s in result.steps:
-        where = s.source or "duckdb"
-        if s.ok:
-            console.print(
-                f"[green]✓[/] [b]{s.name}[/] [dim]({s.kind} · {where})[/] — "
-                f"{s.row_count} row(s) in {s.elapsed_ms} ms"
-            )
-        else:
-            console.print(f"[bold red]✗ {s.name}[/] [dim]({s.kind} · {where})[/] — {s.error}")
-        for a in s.assertions:
-            from rich.markup import escape
+    if not quiet:
+        from rich.markup import escape
 
-            mark = "[green]✓[/]" if a.passed else f"[bold red]✗[/] [dim]({s.on_fail})[/]"
-            console.print(f"      {mark} assert {escape(a.check)}: {escape(a.detail)}")
-            if not a.passed and a.samples:
-                _print_rows(a.sample_columns, a.samples)
+        for s in result.steps:
+            where = s.source or "duckdb"
+            if s.ok:
+                console.print(
+                    f"[green]✓[/] [b]{s.name}[/] [dim]({s.kind} · {where})[/] — "
+                    f"{s.row_count} row(s) in {s.elapsed_ms} ms"
+                )
+            else:
+                console.print(f"[bold red]✗ {s.name}[/] [dim]({s.kind} · {where})[/] — {s.error}")
+            for a in s.assertions:
+                mark = "[green]✓[/]" if a.passed else f"[bold red]✗[/] [dim]({s.on_fail})[/]"
+                console.print(f"      {mark} assert {escape(a.check)}: {escape(a.detail)}")
+                if not a.passed and a.samples:
+                    _print_rows(a.sample_columns, a.samples)
 
-    for name in result.terminals:
-        s = result.step(name)
-        if s is not None and s.ok:
-            console.print(f"\n[b]{name}[/] [dim](result)[/]:")
-            _print_rows(s.columns, s.sample)
-            if s.row_count > len(s.sample):
-                console.print(f"[dim]… {s.row_count - len(s.sample)} more row(s)[/]")
+        for name in result.terminals:
+            s = result.step(name)
+            if s is not None and s.ok:
+                console.print(f"\n[b]{name}[/] [dim](result)[/]:")
+                _print_rows(s.columns, s.sample)
+                if s.row_count > len(s.sample):
+                    console.print(f"[dim]… {s.row_count - len(s.sample)} more row(s)[/]")
 
-    console.print(
-        f"\n[b]run {'[green]✓ ok' if result.ok else '[bold red]✗ failed'}[/][/] "
-        f"in {result.elapsed_ms} ms"
-    )
+        verdict = "[green]✓ ok" if result.ok else "[bold red]✗ failed"
+        console.print(f"\n[b]run {verdict}[/][/] in {result.elapsed_ms} ms")
+        if result.report_path:
+            console.print(f"[dim]report: {result.report_path}[/]")
+
     if not result.ok:
         raise typer.Exit(code=1)
 

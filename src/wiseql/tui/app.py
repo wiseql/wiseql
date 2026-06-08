@@ -29,6 +29,7 @@ HELP_TEXT = f"""\
   F3             Connections (list · test · login)
   F4             Re-validate selected recipe
   F5             Rebuild plan for selected recipe
+  F6             Reports (past runs · Enter to open)
   F10 or q       Quit (also Ctrl+Q)
   Ctrl+N         New project (scaffold here)
   ↑/↓            Select recipe
@@ -96,6 +97,7 @@ class WiseQLApp(App[None]):
         Binding("f3", "connections", "Connections"),
         Binding("f4", "validate", "Validate"),
         Binding("f5", "plan", "Plan"),
+        Binding("f6", "reports", "Reports"),
         Binding("f10", "quit", "Quit"),
         Binding("ctrl+n", "new_project", "New project"),
         # macOS fallbacks: F-keys are media keys by default (F10 = mute),
@@ -211,6 +213,11 @@ class WiseQLApp(App[None]):
         from wiseql.tui.connections import ConnectionsScreen
 
         self.push_screen(ConnectionsScreen(config_path=self.config_path))
+
+    def action_reports(self) -> None:
+        from wiseql.tui.reports import ReportsScreen
+
+        self.push_screen(ReportsScreen())
 
     def action_new_project(self) -> None:
         from wiseql.project import scaffold_project
