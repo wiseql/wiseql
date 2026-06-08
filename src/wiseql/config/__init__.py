@@ -6,7 +6,7 @@ password is resolved at connect time from a swappable auth backend.
 """
 
 from wiseql.config.auth import AuthBackend, EnvBackend, KeyringBackend, WalletBackend, get_backend
-from wiseql.config.connect import PingResult, ping
+from wiseql.config.connect import PingResult, open_connection, ping
 from wiseql.config.loader import ConfigResult, load_active_config, load_config
 from wiseql.config.model import Connection, Defaults, WiseQLConfig
 
@@ -23,5 +23,6 @@ __all__ = [
     "get_backend",
     "load_active_config",
     "load_config",
+    "open_connection",
     "ping",
 ]

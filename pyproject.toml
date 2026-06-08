@@ -22,6 +22,7 @@ dependencies = [
     "pydantic>=2.7",
     "oracledb>=2.4",  # python-oracledb, thin mode — no Oracle Instant Client needed
     "keyring>=25.0",         # OS keychain for connection secrets
+    "duckdb>=1.1",           # intermediate engine: step outputs land here, joins run here
 ]
 
 [project.optional-dependencies]

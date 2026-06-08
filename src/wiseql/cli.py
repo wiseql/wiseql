@@ -113,17 +113,25 @@ def _parse_params(pairs: list[str] | None) -> dict[str, str]:
     return params
 
 
+def _print_rows(columns: list[str], rows: list) -> None:
+    from rich.table import Table
+
+    table = Table(show_lines=False)
+    for col in columns:
+        table.add_column(col)
+    for row in rows:
+        table.add_row(*["" if v is None else str(v) for v in row])
+    console.print(table)
+
+
 @app.command()
 def run(
     recipe: Path,
-    step: str = typer.Option(None, "--step", "-s", help="Which database step to run."),
+    step: str = typer.Option(None, "--step", "-s", help="Run only this one database step."),
     param: list[str] = typer.Option(None, "--param", "-p", help="Bind value, key=value."),
-    max_rows: int = typer.Option(1000, help="Cap on rows fetched."),
+    max_rows: int = typer.Option(1000, help="Cap on rows fetched (single-step mode)."),
 ) -> None:
-    """Run a single database step of a recipe and print its rows."""
-    from rich.table import Table
-
-    from wiseql.engine import choose_step, run_step
+    """Run a recipe end-to-end through DuckDB (or one step with --step)."""
     from wiseql.recipes import load_recipe
 
     loaded = load_recipe(recipe)
@@ -133,12 +141,21 @@ def run(
             console.print(f"    [red]{issue}[/]")
         raise typer.Exit(code=1)
 
+    params = _parse_params(param)
+    config = _load_config().config
+    if step is not None:
+        _run_single_step(loaded, config, step, params, max_rows)
+    else:
+        _run_full_recipe(loaded, config, params)
+
+
+def _run_single_step(loaded, config, step, params, max_rows) -> None:
+    from wiseql.engine import choose_step, run_step
+
     choice, why = choose_step(loaded, step)
     if choice is None:
         console.print(f"[bold red]cannot run:[/] {why}")
         raise typer.Exit(code=1)
-
-    config = _load_config().config
     conn = config.connections.get(choice.source)
     if conn is None:
         console.print(
@@ -147,25 +164,52 @@ def run(
         )
         raise typer.Exit(code=1)
 
-    params = _parse_params(param)
     console.print(f"Running step [b]{choice.name}[/] on [b]{choice.source}[/] [dim]{conn.target}[/dim] …")
     # The auth backend keys off the *connection* name (choice.source), not the step.
     result = run_step(choice.source, conn, choice.sql, params=params, max_rows=max_rows)
     if not result.ok:
         console.print(f"[bold red]✗ {result.error}[/]")
         raise typer.Exit(code=1)
-
-    table = Table(show_lines=False)
-    for col in result.columns:
-        table.add_column(col)
-    for row in result.rows:
-        table.add_row(*["" if v is None else str(v) for v in row])
-    console.print(table)
+    _print_rows(result.columns, result.rows)
     suffix = "+" if result.truncated else ""
     console.print(
         f"[green]✓[/] {result.row_count}{suffix} row(s) in {result.elapsed_ms} ms"
         + ("  [yellow](truncated — more rows exist)[/]" if result.truncated else "")
     )
+
+
+def _run_full_recipe(loaded, config, params) -> None:
+    from wiseql.engine import run_recipe
+
+    result = run_recipe(loaded, config, params=params)
+    if result.error:
+        console.print(f"[bold red]cannot run:[/] {result.error}")
+        raise typer.Exit(code=1)
+
+    for s in result.steps:
+        where = s.source or "duckdb"
+        if s.ok:
+            console.print(
+                f"[green]✓[/] [b]{s.name}[/] [dim]({s.kind} · {where})[/] — "
+                f"{s.row_count} row(s) in {s.elapsed_ms} ms"
+            )
+        else:
+            console.print(f"[bold red]✗ {s.name}[/] [dim]({s.kind} · {where})[/] — {s.error}")
+
+    for name in result.terminals:
+        s = result.step(name)
+        if s is not None and s.ok:
+            console.print(f"\n[b]{name}[/] [dim](result)[/]:")
+            _print_rows(s.columns, s.sample)
+            if s.row_count > len(s.sample):
+                console.print(f"[dim]… {s.row_count - len(s.sample)} more row(s)[/]")
+
+    console.print(
+        f"\n[b]run {'[green]✓ ok' if result.ok else '[bold red]✗ failed'}[/][/] "
+        f"in {result.elapsed_ms} ms"
+    )
+    if not result.ok:
+        raise typer.Exit(code=1)
 
 
 def _load_config():
