@@ -142,7 +142,9 @@ class ConnectionsScreen(Screen[None]):
         name = self._selected_name()
         if name is None:
             return
-        self.query_one("#conn-table", DataTable).update_cell(name, "status", "testing…")
+        self.query_one("#conn-table", DataTable).update_cell(
+            name, "status", "testing…", update_width=True
+        )
         self._test_worker(name)
 
     @work(thread=True)
@@ -161,7 +163,9 @@ class ConnectionsScreen(Screen[None]):
             if outcome.ok
             else f"[red]✗ {outcome.detail.splitlines()[0][:48]}[/]"
         )
-        self.query_one("#conn-table", DataTable).update_cell(name, "status", text)
+        self.query_one("#conn-table", DataTable).update_cell(
+            name, "status", text, update_width=True
+        )
 
     def action_login(self) -> None:
         name = self._selected_name()

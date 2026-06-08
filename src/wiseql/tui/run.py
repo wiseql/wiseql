@@ -40,7 +40,7 @@ class StepDetailScreen(Screen[None]):
 
     DEFAULT_CSS = """
     StepDetailScreen #detail-grid { height: auto; max-height: 18; }
-    StepDetailScreen Static { padding: 0 1; }
+    StepDetailScreen Static { padding: 0 2; }
     """
 
     def __init__(self, step: StepRun) -> None:
@@ -145,12 +145,14 @@ class RunScreen(Screen[None]):
 
     def _update_step(self, name: str, step_run: StepRun | None) -> None:
         table = self.query_one("#run-table", DataTable)
+        # update_width=True so columns grow to fit values set after the rows were
+        # added empty — otherwise "127"/"12.3 ms" get clipped to the header width.
         if step_run is None:
-            table.update_cell(name, "status", "[cyan]running…[/]")
+            table.update_cell(name, "status", "[cyan]running…[/]", update_width=True)
             return
-        table.update_cell(name, "status", _status_markup(step_run))
-        table.update_cell(name, "rows", str(step_run.row_count) if step_run.ok else "—")
-        table.update_cell(name, "ms", str(step_run.elapsed_ms))
+        table.update_cell(name, "status", _status_markup(step_run), update_width=True)
+        table.update_cell(name, "rows", str(step_run.row_count) if step_run.ok else "—", update_width=True)
+        table.update_cell(name, "ms", f"{step_run.elapsed_ms} ms", update_width=True)
 
     def _on_done(self, result: RunResult) -> None:
         self._result = result
