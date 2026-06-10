@@ -49,6 +49,56 @@ def _app(tmp_path: Path) -> WiseQLApp:
     return WiseQLApp(config_path=cfg, projects_dir=tmp_path / "projects")
 
 
+# --- real entry flow (no overrides beyond the injected projects_dir) --------
+
+
+@pytest.mark.asyncio
+async def test_app_opens_to_picker(tmp_path: Path) -> None:
+    _project(tmp_path)
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # entry is the centered picker, independent of cwd
+        assert isinstance(app.screen, ProjectPickerScreen)
+        assert app.screen.query_one("#picker-table", DataTable).row_count == 1
+
+
+@pytest.mark.asyncio
+async def test_picker_open_then_back_to_picker(tmp_path: Path) -> None:
+    _project(tmp_path)
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")  # open the project → dashboard
+        await pilot.pause()
+        assert isinstance(app.screen, ProjectDashboardScreen)
+        await pilot.press("escape")  # back to the picker
+        await pilot.pause()
+        assert isinstance(app.screen, ProjectPickerScreen)
+
+
+@pytest.mark.asyncio
+async def test_new_project_from_picker_creates_and_opens(tmp_path: Path) -> None:
+    from wiseql.tui.wizard import ProjectWizard
+
+    pdir = tmp_path / "projects"
+    pdir.mkdir()
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, ProjectPickerScreen)
+        await pilot.press("n")  # new-project wizard
+        await pilot.pause()
+        assert isinstance(app.screen, ProjectWizard)
+        await pilot.press(*list("fresh"))
+        await pilot.press("enter")
+        await pilot.pause()
+        # created in the projects folder and opened immediately (no relaunch)
+        assert (pdir / "fresh" / "project.toml").is_file()
+        assert isinstance(app.screen, ProjectDashboardScreen)
+        assert app.active_project == pdir / "fresh"
+
+
 # --- picker -----------------------------------------------------------------
 
 
@@ -110,6 +160,59 @@ async def test_runs_tab_opens_report_detail(tmp_path: Path) -> None:
         await pilot.press("enter")
         await pilot.pause()
         assert isinstance(app.screen, ReportDetailScreen)
+
+
+@pytest.mark.asyncio
+async def test_f3_opens_connections(tmp_path: Path) -> None:
+    from wiseql.tui.connections import ConnectionsScreen
+
+    proj = _project(tmp_path)
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.push_screen(ProjectDashboardScreen(proj, app.config_path))
+        await pilot.pause()
+        await pilot.press("f3")
+        await pilot.pause()
+        assert isinstance(app.screen, ConnectionsScreen)
+
+
+@pytest.mark.asyncio
+async def test_ctrl_t_without_default_connection_does_not_run(tmp_path: Path) -> None:
+    # The scaffolded project + this config declare no default connection, so the
+    # sync guard must fire — no worker, no DB connection.
+    proj = _project(tmp_path)
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.push_screen(ProjectDashboardScreen(proj, app.config_path))
+        await pilot.pause()
+        await pilot.press("ctrl+t")
+        await pilot.pause()
+        assert len(app.workers) == 0
+
+
+@pytest.mark.asyncio
+async def test_ctrl_n_from_dashboard_switches_project(tmp_path: Path) -> None:
+    # Open one project, create another via Ctrl+N → the dashboard switches to it
+    # without stacking dashboards.
+    from wiseql.tui.wizard import ProjectWizard
+
+    _project(tmp_path)  # 'demo'
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")  # open demo → dashboard
+        await pilot.pause()
+        assert isinstance(app.screen, ProjectDashboardScreen)
+        await pilot.press("ctrl+n")
+        await pilot.pause()
+        assert isinstance(app.screen, ProjectWizard)
+        await pilot.press(*list("second"))
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.active_project.name == "second"
+        assert isinstance(app.screen, ProjectDashboardScreen)
+        dashboards = [s for s in app.screen_stack if isinstance(s, ProjectDashboardScreen)]
+        assert len(dashboards) == 1  # switched, not stacked
 
 
 @pytest.mark.asyncio

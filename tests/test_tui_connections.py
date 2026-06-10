@@ -1,10 +1,12 @@
 """Connections-screen tests (S2.2).
 
 DB-free (``ping`` is monkeypatched) and Keychain-free (a dict-backed fake
-``keyring`` module). Exercises the F3 screen, the live-test status update via
-the thread worker, and the login flow for keyring vs. env backends.
+``keyring`` module). The screen is pushed directly — it's independent of the
+app's entry model.
 """
 
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -13,8 +15,6 @@ from textual.widgets import DataTable
 from wiseql.config import PingResult
 from wiseql.tui.app import WiseQLApp
 from wiseql.tui.connections import ConnectionsScreen, LoginModal
-
-EXAMPLES = Path(__file__).parent.parent / "examples"
 
 CONFIG = """\
 [connections.env_conn]
@@ -31,26 +31,25 @@ auth    = "keyring"
 """
 
 
-def _config(tmp_path: Path) -> Path:
-    p = tmp_path / "config.toml"
-    p.write_text(CONFIG, encoding="utf-8")
-    return p
-
-
 def _app(tmp_path: Path) -> WiseQLApp:
-    return WiseQLApp(recipes_dir=EXAMPLES, config_path=_config(tmp_path))
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(CONFIG, encoding="utf-8")
+    return WiseQLApp(config_path=cfg, projects_dir=tmp_path / "projects")
+
+
+def _screen(tmp_path: Path) -> ConnectionsScreen:
+    return ConnectionsScreen(config_path=tmp_path / "config.toml")
 
 
 @pytest.mark.asyncio
-async def test_f3_opens_connections_and_lists(tmp_path: Path) -> None:
+async def test_lists_connections(tmp_path: Path) -> None:
     app = _app(tmp_path)
     async with app.run_test() as pilot:
-        await pilot.press("f3")
+        app.push_screen(_screen(tmp_path))
         await pilot.pause()
         assert isinstance(app.screen, ConnectionsScreen)
         table = app.screen.query_one("#conn-table", DataTable)
         assert table.row_count == 2
-        # sorted alphabetically: env_conn, kr_conn
         assert "env_conn" in str(table.get_cell("env_conn", "name"))
         assert table.get_cell("env_conn", "target") == "localhost:1521/FREEPDB1"
 
@@ -63,7 +62,7 @@ async def test_test_action_updates_status(tmp_path: Path, monkeypatch) -> None:
     )
     app = _app(tmp_path)
     async with app.run_test() as pilot:
-        await pilot.press("f3")
+        app.push_screen(_screen(tmp_path))
         await pilot.pause()
         await pilot.press("t")  # cursor on row 0 = env_conn
         await app.workers.wait_for_complete()
@@ -81,7 +80,7 @@ async def test_test_action_reports_failure(tmp_path: Path, monkeypatch) -> None:
     )
     app = _app(tmp_path)
     async with app.run_test() as pilot:
-        await pilot.press("f3")
+        app.push_screen(_screen(tmp_path))
         await pilot.pause()
         await pilot.press("t")
         await app.workers.wait_for_complete()
@@ -93,9 +92,6 @@ async def test_test_action_reports_failure(tmp_path: Path, monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_login_opens_modal_for_keyring_and_stores(tmp_path: Path, monkeypatch) -> None:
-    import sys
-    import types
-
     store: dict[tuple[str, str], str] = {}
     fake = types.ModuleType("keyring")
     fake.get_password = lambda s, u: store.get((s, u))
@@ -104,9 +100,9 @@ async def test_login_opens_modal_for_keyring_and_stores(tmp_path: Path, monkeypa
 
     app = _app(tmp_path)
     async with app.run_test() as pilot:
-        await pilot.press("f3")
+        app.push_screen(_screen(tmp_path))
         await pilot.pause()
-        await pilot.press("down")  # move to row 1 = kr_conn
+        await pilot.press("down")  # row 1 = kr_conn
         await pilot.press("l")
         assert isinstance(app.screen, LoginModal)
         await pilot.press("s", "3", "c", "r", "t")
@@ -119,18 +115,7 @@ async def test_login_opens_modal_for_keyring_and_stores(tmp_path: Path, monkeypa
 async def test_login_warns_for_env_backend(tmp_path: Path) -> None:
     app = _app(tmp_path)
     async with app.run_test() as pilot:
-        await pilot.press("f3")
+        app.push_screen(_screen(tmp_path))
         await pilot.pause()
         await pilot.press("l")  # row 0 = env_conn → no modal, just a warning
         assert isinstance(app.screen, ConnectionsScreen)
-
-
-@pytest.mark.asyncio
-async def test_escape_returns_to_browser(tmp_path: Path) -> None:
-    app = _app(tmp_path)
-    async with app.run_test() as pilot:
-        await pilot.press("f3")
-        await pilot.pause()
-        assert isinstance(app.screen, ConnectionsScreen)
-        await pilot.press("escape")
-        assert not isinstance(app.screen, ConnectionsScreen)
