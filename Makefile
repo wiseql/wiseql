@@ -3,10 +3,13 @@
 # corrupted by sync conflicts. ~/.venvs/wiseql is local-only and safe.
 export UV_PROJECT_ENVIRONMENT := $(HOME)/.venvs/wiseql
 
-.PHONY: run test sync validate plan clean
+.PHONY: run run-ai test sync validate plan clean
 
 run:        ## open the TUI
 	uv run wiseql
+
+run-ai:     ## open the TUI with the optional AI add-on ([ai] extra)
+	uv run --extra ai wiseql
 
 test:       ## run the test suite
 	uv run pytest -q
