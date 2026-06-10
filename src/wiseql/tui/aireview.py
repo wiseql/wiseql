@@ -65,6 +65,15 @@ class AIReviewScreen(Screen[None]):
             for chunk in self._provider.stream(self._prompt):
                 any_chunk = True
                 self.app.call_from_thread(self._append, chunk)
+        except ModuleNotFoundError:
+            # AI is enabled but the [ai] extra isn't in this process.
+            self.app.call_from_thread(
+                self._finish,
+                "The [ai] add-on isn't installed in this session.\n"
+                "Relaunch with:  make run-ai   (or:  uv run --extra ai wiseql)\n"
+                "For an installed copy:  uv tool install 'wiseql[ai]'",
+            )
+            return
         except Exception as exc:  # noqa: BLE001 — degrade to a readable message
             self.app.call_from_thread(self._finish, f"AI unavailable: {str(exc).strip()}")
             return

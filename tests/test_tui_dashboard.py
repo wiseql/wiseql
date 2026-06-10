@@ -305,6 +305,33 @@ async def test_f4_ai_review_streams_findings(tmp_path: Path, monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
+async def test_f4_ai_extra_missing_shows_install_hint(tmp_path: Path, monkeypatch) -> None:
+    # AI enabled but the [ai] extra isn't in this process (the make run vs run-ai trap).
+    from wiseql.tui.aireview import AIReviewScreen
+
+    class _Enabled:
+        name = "ollama"
+
+        def stream(self, prompt):
+            raise ModuleNotFoundError("No module named 'ollama'")
+            yield  # make it a generator
+
+    monkeypatch.setattr("wiseql.ai.get_provider", lambda *a, **k: _Enabled())
+    proj = _project(tmp_path)
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.push_screen(ProjectDashboardScreen(proj, app.config_path))
+        await pilot.pause()
+        await pilot.press("2")
+        await pilot.pause()
+        await pilot.press("f4")
+        for _ in range(5):
+            await pilot.pause()
+        assert isinstance(app.screen, AIReviewScreen)
+        assert "run-ai" in app.screen.buffer  # actionable, not "No module named 'ollama'"
+
+
+@pytest.mark.asyncio
 async def test_f4_ai_off_opens_screen_with_hint(tmp_path: Path, monkeypatch) -> None:
     from wiseql.ai import NullProvider
     from wiseql.tui.aireview import AIReviewScreen
