@@ -100,6 +100,7 @@ class ProjectDashboardScreen(Screen[None]):
         Binding("right", "next_tab", "Next tab", priority=True, show=False),
         Binding("f2", "run", "Run"),
         Binding("ctrl+r", "resume", "Resume"),
+        Binding("ctrl+d", "diff", "Diff vs prev"),
         Binding("f3", "connections", "Connections"),
         Binding("ctrl+t", "sync", "Sync schema"),
         Binding("ctrl+n", "new_project", "New project"),
@@ -172,7 +173,7 @@ class ProjectDashboardScreen(Screen[None]):
         # Discoverable hints for the Recipes-tab focus flow.
         self.query_one("#recipe-list").border_subtitle = "enter → scroll"
         self.query_one("#recipe-detail").border_subtitle = "esc → list"
-        self.query_one("#runs-table").border_subtitle = "enter → detail · ctrl+r → resume"
+        self.query_one("#runs-table").border_subtitle = "enter → detail · ctrl+r → resume · ctrl+d → diff"
         self._render_overview()
         self._load_recipes()
         self._load_runs()
@@ -407,6 +408,34 @@ class ProjectDashboardScreen(Screen[None]):
                 runs_dir=self._project / "runs", resume_from=row.run_dir,
             )
         )
+
+    def action_diff(self) -> None:
+        """Diff the selected run against the previous run of the same recipe."""
+        table = self.query_one("#runs-table", DataTable)
+        idx = table.cursor_row
+        if not (0 <= idx < len(self._run_rows)):
+            self.notify("select a run first (Runs tab)", severity="warning")
+            return
+        newer = self._run_rows[idx]
+        if newer.report_path is None:
+            self.notify("interrupted run has no report to diff", severity="warning")
+            return
+        # _run_rows is newest-first, so older runs sit at higher indices.
+        older = next(
+            (r for r in self._run_rows[idx + 1:] if r.report_path is not None and r.recipe == newer.recipe),
+            None,
+        )
+        if older is None:
+            self.notify(f"no earlier run of '{newer.recipe}' to diff against", severity="information")
+            return
+        from wiseql.engine import diff_runs
+        from wiseql.tui.diff import DiffScreen
+
+        d = diff_runs(
+            load_report(older.report_path), load_report(newer.report_path),
+            a_label=older.run_dir.name, b_label=newer.run_dir.name,
+        )
+        self.app.push_screen(DiffScreen(d))
 
     def _find_recipe_by_name(self, name: str):
         """Find the LoadResult whose [recipe].name matches (manifests store the name)."""

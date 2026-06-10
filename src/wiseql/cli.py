@@ -330,6 +330,113 @@ def _run_full_recipe(loaded, config, params, *, quiet=False, runs_dir=None, resu
         raise typer.Exit(code=1)
 
 
+@app.command()
+def diff(
+    run_a: str = typer.Argument(..., help="Older run: a run id (under the project's runs/) or a path."),
+    run_b: str = typer.Argument(..., help="Newer run: a run id or a path."),
+) -> None:
+    """Compare two runs step by step — row deltas, status & assertion changes."""
+    from wiseql.engine import diff_runs
+    from wiseql.report import load_report
+
+    pa = _resolve_report(run_a)
+    pb = _resolve_report(run_b)
+    d = diff_runs(load_report(pa), load_report(pb), a_label=pa.parent.name, b_label=pb.parent.name)
+    _render_diff(d)
+
+
+def _resolve_report(arg: str) -> Path:
+    """Resolve a diff argument to a report.json: a path (file/dir) or a run id."""
+    from wiseql.report import REPORT_NAME
+
+    p = Path(arg)
+    if p.is_file():
+        return p
+    if p.is_dir():
+        rp = p / REPORT_NAME
+        if rp.is_file():
+            return rp
+        console.print(f"[bold red]no {REPORT_NAME} in[/] {p}")
+        raise typer.Exit(code=1)
+
+    from wiseql.project import find_project_root
+
+    root = find_project_root()
+    if root is None:
+        console.print(f"[bold red]not inside a project[/] — pass a path to a run dir or report for '{arg}'.")
+        raise typer.Exit(code=1)
+    rp = root / "runs" / arg / REPORT_NAME
+    if not rp.is_file():
+        console.print(f"[bold red]no such run:[/] {arg} (looked in {root / 'runs'})")
+        raise typer.Exit(code=1)
+    return rp
+
+
+def _delta_markup(delta: int | None) -> str:
+    if delta is None:
+        return "—"
+    if delta == 0:
+        return "[dim]0[/]"
+    return f"[b cyan]{'+' if delta > 0 else ''}{delta}[/]"
+
+
+def _diff_notes(step) -> str:
+    from rich.markup import escape
+
+    parts: list[str] = []
+    for a in step.assertions:
+        if not a.changed:
+            continue
+        if a.a_passed != a.b_passed:
+            ap = "—" if a.a_passed is None else ("✓" if a.a_passed else "✗")
+            bp = "—" if a.b_passed is None else ("✓" if a.b_passed else "✗")
+            parts.append(f"{escape(a.check)}: {ap}→{bp}")
+        else:  # same pass/fail, detail moved (e.g. "3 rows" → "4 rows")
+            parts.append(f"{escape(a.check)}: {escape(a.a_detail)} → {escape(a.b_detail)}")
+    return "; ".join(parts)
+
+
+def _render_diff(d) -> None:
+    from rich.markup import escape
+    from rich.table import Table
+
+    if d.same_recipe:
+        console.print(f"[b]{escape(d.recipe_a)}[/]")
+    else:
+        console.print(f"[bold yellow]⚠ different recipes:[/] A={escape(d.recipe_a)}  B={escape(d.recipe_b)}")
+    if d.params_differ:
+        console.print(f"[yellow]⚠ params differ:[/] A={d.params_a}  B={d.params_b}")
+    av, bv = ("ok" if d.a_ok else "failed"), ("ok" if d.b_ok else "failed")
+    verdict = f"A {av} → B {bv}"
+    verdict = f"[bold yellow]{verdict}[/]" if d.verdict_changed else f"[dim]{verdict}[/]"
+    console.print(f"[dim]A=[/]{escape(d.a_label)}  [dim]B=[/]{escape(d.b_label)}  {verdict}\n")
+
+    table = Table()
+    table.add_column("step", style="bold")
+    table.add_column("A rows", justify="right")
+    table.add_column("B rows", justify="right")
+    table.add_column("Δ", justify="right")
+    table.add_column("status")
+    table.add_column("notes")
+    for s in d.steps:
+        a_rows = "—" if s.a_rows is None else str(s.a_rows)
+        b_rows = "—" if s.b_rows is None else str(s.b_rows)
+        if not s.in_a:
+            delta, status = "[green]new[/]", "[green]added[/]"
+        elif not s.in_b:
+            delta, status = "[red]gone[/]", "[red]removed[/]"
+        else:
+            delta = _delta_markup(s.row_delta)
+            a, b = ("ok" if s.a_ok else "err"), ("ok" if s.b_ok else "err")
+            status = f"[bold yellow]{a}→{b}[/]" if s.ok_changed else ("[dim]ok[/]" if s.a_ok else "[red]err[/]")
+        name = f"[yellow]{escape(s.name)}[/]" if s.changed else escape(s.name)
+        table.add_row(name, a_rows, b_rows, delta, status, _diff_notes(s))
+    console.print(table)
+
+    n = len(d.changed_steps)
+    console.print(f"\n[b]{n}[/] step(s) changed" + ("" if n else " — runs are identical"))
+
+
 def _load_config():
     """Load layered config, printing any errors. Returns the ConfigResult.
 
