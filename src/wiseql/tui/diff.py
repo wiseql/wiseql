@@ -62,8 +62,19 @@ class DiffScreen(Screen[None]):
     BINDINGS = [Binding("escape", "app.pop_screen", "Back")]
 
     DEFAULT_CSS = """
-    DiffScreen #diff-status { padding: 0 1; height: auto; }
-    DiffScreen #diff-table { height: 1fr; }
+    DiffScreen #diff-summary {
+        border: round $primary 50%;
+        border-title-color: $accent;
+        height: auto;
+        padding: 0 1;
+        margin: 1 1 0 1;
+    }
+    DiffScreen #diff-table {
+        border: round $primary 50%;
+        border-title-color: $accent;
+        height: 1fr;
+        margin: 0 1 1 1;
+    }
     """
 
     def __init__(self, diff) -> None:
@@ -72,13 +83,43 @@ class DiffScreen(Screen[None]):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield Static("", id="diff-status")
+        yield Static("", id="diff-summary")
         yield DataTable(id="diff-table", cursor_type="row", zebra_stripes=True)
         yield Footer()
 
     def on_mount(self) -> None:
         d = self._diff
+        self.title = "WiseQL — Diff"
+        self.sub_title = d.recipe_a if d.same_recipe else f"{d.recipe_a} ≠ {d.recipe_b}"
+
+        # Summary panel — framed + titled, so it reads as a labelled window.
+        summary = self.query_one("#diff-summary", Static)
+        summary.border_title = "Diff — comparing two runs"
+        av = "[green]ok[/]" if d.a_ok else "[red]failed[/]"
+        bv = "[green]ok[/]" if d.b_ok else "[red]failed[/]"
+        lines: list[str] = []
+        if d.same_recipe:
+            lines.append(f"recipe  [b]{escape(d.recipe_a)}[/]")
+        else:
+            lines.append(f"[bold yellow]⚠ different recipes[/]  A=[b]{escape(d.recipe_a)}[/]  B=[b]{escape(d.recipe_b)}[/]")
+        lines.append(f"[dim]A (older):[/]  {escape(d.a_label)}   {av}")
+        lines.append(f"[dim]B (newer):[/]  {escape(d.b_label)}   {bv}")
+        flags: list[str] = []
+        if d.verdict_changed:
+            flags.append("[bold yellow]verdict changed[/]")
+        if d.params_differ:
+            flags.append(f"[yellow]params differ[/] [dim](A={d.params_a}  B={d.params_b})[/]")
+        if flags:
+            lines.append("  ·  ".join(flags))
+        n = len(d.changed_steps)
+        verdict_word = "identical" if n == 0 else f"{n} of {len(d.steps)} step(s) changed"
+        lines.append(f"[b]{verdict_word}[/]")
+        summary.update("\n".join(lines))
+
+        # Results table — framed + titled.
         table = self.query_one("#diff-table", DataTable)
+        table.border_title = "per-step changes"
+        table.border_subtitle = "Δ = B − A  ·  changed rows in yellow  ·  Esc = back"
         for col in ("step", "A rows", "B rows", "Δ", "status", "notes"):
             table.add_column(col, key=col)
         for s in d.steps:
@@ -86,17 +127,4 @@ class DiffScreen(Screen[None]):
             b_rows = "—" if s.b_rows is None else str(s.b_rows)
             name = f"[yellow]{escape(s.name)}[/]" if s.changed else escape(s.name)
             table.add_row(name, a_rows, b_rows, _delta_cell(s), _status_cell(s), _notes_cell(s), key=s.name)
-
-        recipe = (
-            f"[b]{escape(d.recipe_a)}[/]" if d.same_recipe
-            else f"[bold yellow]⚠ {escape(d.recipe_a)} ≠ {escape(d.recipe_b)}[/]"
-        )
-        av, bv = ("ok" if d.a_ok else "failed"), ("ok" if d.b_ok else "failed")
-        verdict = f"A {av} → B {bv}"
-        verdict = f"[bold yellow]{verdict}[/]" if d.verdict_changed else f"[dim]{verdict}[/]"
-        warn = "  [yellow]· params differ[/]" if d.params_differ else ""
-        self.query_one("#diff-status", Static).update(
-            f"{recipe}  [dim]A=[/]{escape(d.a_label)} [dim]B=[/]{escape(d.b_label)}  {verdict}{warn}"
-            f"  [dim]· {len(d.changed_steps)} changed · Esc = back[/]"
-        )
         table.focus()

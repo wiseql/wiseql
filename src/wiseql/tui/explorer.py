@@ -69,9 +69,15 @@ class ExplorerScreen(Screen[None]):
         yield Footer()
 
     def on_mount(self) -> None:
+        self.title = "WiseQL — Data Explorer"
         self.sub_title = f"{self._recipe} · {self._run_dir.name}" if self._recipe else self._run_dir.name
         self._explorer = CheckpointExplorer(self._run_dir)
-        self.query_one("#explorer-side").border_title = "tables"
+        self.query_one("#explorer-side").border_title = "steps & history"
+        sql = self.query_one("#sql-input", Input)
+        sql.border_title = "SQL"
+        sql.border_subtitle = "Enter to run"
+        results = self.query_one("#explorer-results", DataTable)
+        results.border_title = "results"
 
         infos = self._explorer.table_info()
         if infos:
