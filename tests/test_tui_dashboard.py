@@ -274,17 +274,15 @@ async def test_runs_tab_ctrl_e_opens_explorer_and_queries(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_f4_ai_review_shows_findings(tmp_path: Path, monkeypatch) -> None:
-    from wiseql.ai import AIResult
+async def test_f4_ai_review_streams_findings(tmp_path: Path, monkeypatch) -> None:
     from wiseql.tui.aireview import AIReviewScreen
 
-    captured = {}
-
     class _Fake:
-        def validate_recipe(self, recipe_text, context):
-            captured["text"] = recipe_text
-            captured["context"] = context
-            return AIResult(available=True, text="step 3 reads a missing column")
+        name = "fake"
+
+        def stream(self, prompt):
+            yield "step 3 reads "
+            yield "a missing column"
 
     monkeypatch.setattr("wiseql.ai.get_provider", lambda *a, **k: _Fake())
     proj = _project(tmp_path)  # recipe uses an external sql_file (special_marker_xyz)
@@ -295,24 +293,23 @@ async def test_f4_ai_review_shows_findings(tmp_path: Path, monkeypatch) -> None:
         await pilot.press("2")  # Recipes tab (selects the recipe)
         await pilot.pause()
         await pilot.press("f4")
-        for _ in range(5):
+        for _ in range(6):
             await pilot.pause()
-        assert isinstance(app.screen, AIReviewScreen)
-        # the AI got the *resolved* external SQL, not just the sql_file pointer
-        assert "special_marker_xyz" in captured["text"]
-        # and the project context was passed as grounding (scaffold writes context/)
-        assert captured["context"] is not None
+        assert isinstance(app.screen, AIReviewScreen)  # opens immediately
+        # the prompt carried the *resolved* external SQL + the project context
+        assert "special_marker_xyz" in app.screen._prompt
+        assert "schema/context" in app.screen._prompt
+        # streamed chunks accumulated
+        assert app.screen.buffer == "step 3 reads a missing column"
+        assert app.screen.done is True
 
 
 @pytest.mark.asyncio
-async def test_f4_ai_off_stays_on_dashboard(tmp_path: Path, monkeypatch) -> None:
-    from wiseql.ai import AIResult
+async def test_f4_ai_off_opens_screen_with_hint(tmp_path: Path, monkeypatch) -> None:
+    from wiseql.ai import NullProvider
+    from wiseql.tui.aireview import AIReviewScreen
 
-    class _Off:
-        def validate_recipe(self, recipe_text, context):
-            return AIResult(available=False)
-
-    monkeypatch.setattr("wiseql.ai.get_provider", lambda *a, **k: _Off())
+    monkeypatch.setattr("wiseql.ai.get_provider", lambda *a, **k: NullProvider())
     proj = _project(tmp_path)
     app = _app(tmp_path)
     async with app.run_test() as pilot:
@@ -323,7 +320,8 @@ async def test_f4_ai_off_stays_on_dashboard(tmp_path: Path, monkeypatch) -> None
         await pilot.press("f4")
         for _ in range(5):
             await pilot.pause()
-        assert isinstance(app.screen, ProjectDashboardScreen)  # hint notified, no screen
+        assert isinstance(app.screen, AIReviewScreen)  # opens, then shows the off hint
+        assert "off" in app.screen.buffer.lower()
 
 
 @pytest.mark.asyncio

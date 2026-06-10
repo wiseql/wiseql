@@ -389,31 +389,20 @@ class ProjectDashboardScreen(Screen[None]):
         )
 
     def action_ai_review(self) -> None:
-        """AI semantic review of the selected recipe (Recipes tab)."""
+        """AI semantic review of the selected recipe — opens the (streaming) view at once."""
         if self._current is None or self._current.recipe is None or not self._current.ok:
             self.notify("select a valid recipe first (Recipes tab)", severity="warning")
             return
-        self.notify("Running AI review …")
-        self._ai_review_worker(self.recipe_toml_text, self._current.resolved_sql)
-
-    @work(thread=True)
-    def _ai_review_worker(self, raw_toml: str, resolved_sql: dict) -> None:
         from wiseql.ai import get_provider
+        from wiseql.ai.prompts import build_validate_prompt
         from wiseql.context import read_context
         from wiseql.recipes import recipe_review_text
+        from wiseql.tui.aireview import AIReviewScreen
 
-        text = recipe_review_text(raw_toml, resolved_sql)
-        # One call: NullProvider answers instantly; OllamaProvider reports why if down.
-        result = get_provider().validate_recipe(text, read_context(self._project))
-        self.app.call_from_thread(self._show_ai_review, result)
-
-    def _show_ai_review(self, result) -> None:
-        if result.available:
-            from wiseql.tui.aireview import AIReviewScreen
-
-            self.app.push_screen(AIReviewScreen("AI recipe review", result.text))
-        else:
-            self.notify(result.text or "AI is off — enable in Settings (F9)", severity="information")
+        text = recipe_review_text(self.recipe_toml_text, self._current.resolved_sql)
+        prompt = build_validate_prompt(text, read_context(self._project))
+        # Open the view immediately; it streams the result on its own worker.
+        self.app.push_screen(AIReviewScreen("AI recipe review", get_provider(), prompt))
 
     def action_resume(self) -> None:
         """Resume the selected run from its checkpoints (Runs tab)."""
