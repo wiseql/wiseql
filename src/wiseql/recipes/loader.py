@@ -50,6 +50,17 @@ class LoadResult:
         return self.recipe is not None and not self.errors
 
 
+def recipe_review_text(raw_toml: str, resolved_sql: dict[str, str]) -> str:
+    """Recipe text for an AI review: the raw TOML plus each step's *resolved*
+    SQL (``sql_file`` references inlined). Without the resolved SQL, the model
+    sees only a filename for external-SQL steps and can't reason about columns —
+    which is exactly what semantic validation needs (S6.2)."""
+    parts = [raw_toml.strip(), "", "--- resolved SQL per step ---"]
+    for name, sql in resolved_sql.items():
+        parts.append(f"-- step: {name}\n{sql.strip()}")
+    return "\n\n".join(parts)
+
+
 def _pydantic_issues(exc: ValidationError) -> list[Issue]:
     issues: list[Issue] = []
     for err in exc.errors():

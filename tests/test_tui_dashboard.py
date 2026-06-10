@@ -274,6 +274,59 @@ async def test_runs_tab_ctrl_e_opens_explorer_and_queries(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_f4_ai_review_shows_findings(tmp_path: Path, monkeypatch) -> None:
+    from wiseql.ai import AIResult
+    from wiseql.tui.aireview import AIReviewScreen
+
+    captured = {}
+
+    class _Fake:
+        def validate_recipe(self, recipe_text, context):
+            captured["text"] = recipe_text
+            captured["context"] = context
+            return AIResult(available=True, text="step 3 reads a missing column")
+
+    monkeypatch.setattr("wiseql.ai.get_provider", lambda *a, **k: _Fake())
+    proj = _project(tmp_path)  # recipe uses an external sql_file (special_marker_xyz)
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.push_screen(ProjectDashboardScreen(proj, app.config_path))
+        await pilot.pause()
+        await pilot.press("2")  # Recipes tab (selects the recipe)
+        await pilot.pause()
+        await pilot.press("f4")
+        for _ in range(5):
+            await pilot.pause()
+        assert isinstance(app.screen, AIReviewScreen)
+        # the AI got the *resolved* external SQL, not just the sql_file pointer
+        assert "special_marker_xyz" in captured["text"]
+        # and the project context was passed as grounding (scaffold writes context/)
+        assert captured["context"] is not None
+
+
+@pytest.mark.asyncio
+async def test_f4_ai_off_stays_on_dashboard(tmp_path: Path, monkeypatch) -> None:
+    from wiseql.ai import AIResult
+
+    class _Off:
+        def validate_recipe(self, recipe_text, context):
+            return AIResult(available=False)
+
+    monkeypatch.setattr("wiseql.ai.get_provider", lambda *a, **k: _Off())
+    proj = _project(tmp_path)
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.push_screen(ProjectDashboardScreen(proj, app.config_path))
+        await pilot.pause()
+        await pilot.press("2")
+        await pilot.pause()
+        await pilot.press("f4")
+        for _ in range(5):
+            await pilot.pause()
+        assert isinstance(app.screen, ProjectDashboardScreen)  # hint notified, no screen
+
+
+@pytest.mark.asyncio
 async def test_f3_opens_connections(tmp_path: Path) -> None:
     from wiseql.tui.connections import ConnectionsScreen
 

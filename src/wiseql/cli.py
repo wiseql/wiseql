@@ -97,8 +97,19 @@ def projects() -> None:
 
 
 @app.command()
-def validate(paths: list[Path]) -> None:
-    """Validate one or more recipe files. Exit code 1 if any has errors."""
+def validate(
+    paths: list[Path],
+    ai: bool = typer.Option(
+        False, "--ai",
+        help="Also run an AI semantic review (needs the [ai] add-on enabled). Advisory — never changes the exit code.",
+    ),
+) -> None:
+    """Validate one or more recipe files. Exit code 1 if any has errors.
+
+    With ``--ai`` each *structurally-valid* recipe also gets a semantic review
+    (one LLM call per file — slow for globs). AI findings are advisory and never
+    affect the exit code; the cron contract stays structural.
+    """
     from wiseql.recipes import build_plan, load_recipe
 
     failed = False
@@ -117,8 +128,31 @@ def validate(paths: list[Path]) -> None:
                 f"[dim]{issue.where}[/] — {issue.message}"
             )
         failed |= bool(errors)
+        if ai and not errors:  # a structurally-broken recipe needs no AI opinion
+            _ai_review(path, result)
 
     raise typer.Exit(code=1 if failed else 0)
+
+
+def _ai_review(path: Path, loaded) -> None:
+    """Print an AI semantic review of one recipe (advisory). Degrades to a hint."""
+    from wiseql.ai import get_provider
+    from wiseql.context import read_context
+    from wiseql.project import find_project_root
+    from wiseql.recipes import recipe_review_text
+
+    text = recipe_review_text(path.read_text(encoding="utf-8"), loaded.resolved_sql)
+    context = read_context(find_project_root(path.resolve().parent))
+    # One call: NullProvider returns available=False instantly (no network);
+    # OllamaProvider catches unreachable/missing-model and reports the reason.
+    result = get_provider().validate_recipe(text, context)
+    if result.available:
+        console.print("    [b cyan]AI review:[/]")
+        for line in (result.text or "(no response)").splitlines():
+            console.print(f"      {escape_md(line)}")
+    else:
+        hint = result.text or "AI is off — enable with `wiseql ai setup`."
+        console.print(f"    [dim]AI review skipped — {escape_md(hint)}[/]")
 
 
 @app.command()
