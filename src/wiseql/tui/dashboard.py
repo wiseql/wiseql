@@ -57,11 +57,21 @@ class ProjectDashboardScreen(Screen[None]):
 
     DEFAULT_CSS = """
     ProjectDashboardScreen TabPane { padding: 0; }
-    ProjectDashboardScreen #overview-pane { border: round $primary; height: 1fr; padding: 1 2; }
-    ProjectDashboardScreen #recipe-list { width: 32; border: round $primary; height: 1fr; }
-    ProjectDashboardScreen #recipe-detail { border: round $primary; height: 1fr; padding: 0 1; }
-    ProjectDashboardScreen #runs-table { border: round $primary; height: 1fr; margin: 0; }
+    ProjectDashboardScreen #overview-pane { border: round $primary 50%; height: 1fr; padding: 1 2; }
+    ProjectDashboardScreen #recipe-list { width: 32; border: round $primary 50%; height: 1fr; }
+    ProjectDashboardScreen #recipe-detail { border: round $primary 50%; height: 1fr; padding: 0 1; }
+    ProjectDashboardScreen #runs-table { border: round $primary 50%; height: 1fr; margin: 0; }
     ProjectDashboardScreen .pane-label { color: $text-muted; padding-top: 1; }
+
+    /* The focused pane lights up (brighter accent border + title) so it's
+       obvious where the keys go. */
+    ProjectDashboardScreen #overview-pane:focus,
+    ProjectDashboardScreen #recipe-list:focus,
+    ProjectDashboardScreen #recipe-detail:focus,
+    ProjectDashboardScreen #runs-table:focus {
+        border: round $accent;
+        border-title-color: $accent;
+    }
     """
 
     def __init__(self, project: Path, config_path: Path | None = None) -> None:
