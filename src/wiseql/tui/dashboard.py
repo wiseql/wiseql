@@ -38,12 +38,16 @@ from wiseql.report import list_reports, load_report, report_info
 
 
 class ProjectDashboardScreen(Screen[None]):
+    _TABS = ("overview", "recipes", "runs")
+
     BINDINGS = [
         Binding("escape", "back", "Projects"),
-        # priority so the digits switch tabs even when a tab's list has focus.
+        # priority so tab nav works even when a tab's list/table has focus.
         Binding("1", "switch('overview')", "Overview", priority=True),
         Binding("2", "switch('recipes')", "Recipes", priority=True),
         Binding("3", "switch('runs')", "Runs", priority=True),
+        Binding("left", "prev_tab", "Prev tab", priority=True, show=False),
+        Binding("right", "next_tab", "Next tab", priority=True, show=False),
         Binding("f2", "run", "Run"),
         Binding("f3", "connections", "Connections"),
         Binding("ctrl+t", "sync", "Sync schema"),
@@ -52,11 +56,12 @@ class ProjectDashboardScreen(Screen[None]):
     ]
 
     DEFAULT_CSS = """
-    ProjectDashboardScreen #recipe-list { width: 30; border-right: solid $primary; }
-    ProjectDashboardScreen #recipe-detail { padding: 0 1; }
+    ProjectDashboardScreen TabPane { padding: 0; }
+    ProjectDashboardScreen #overview-pane { border: round $primary; height: 1fr; padding: 1 2; }
+    ProjectDashboardScreen #recipe-list { width: 32; border: round $primary; height: 1fr; }
+    ProjectDashboardScreen #recipe-detail { border: round $primary; height: 1fr; padding: 0 1; }
+    ProjectDashboardScreen #runs-table { border: round $primary; height: 1fr; margin: 0; }
     ProjectDashboardScreen .pane-label { color: $text-muted; padding-top: 1; }
-    ProjectDashboardScreen #overview-body { padding: 1 1; }
-    ProjectDashboardScreen #runs-table { height: 1fr; }
     """
 
     def __init__(self, project: Path, config_path: Path | None = None) -> None:
@@ -77,7 +82,7 @@ class ProjectDashboardScreen(Screen[None]):
         yield Header()
         with TabbedContent(id="tabs"):
             with TabPane("Overview", id="overview"):
-                with VerticalScroll():
+                with VerticalScroll(id="overview-pane"):
                     yield Static("", id="overview-body")
             with TabPane("Recipes", id="recipes"):
                 with Horizontal():
@@ -95,13 +100,49 @@ class ProjectDashboardScreen(Screen[None]):
     def on_mount(self) -> None:
         self.title = "WiseQL"
         self.sub_title = f"project · {self._project.name}"
+        # Bordered, titled panes for a consistent framed look across tabs.
+        for sel, label in (
+            ("#overview-pane", "Project"),
+            ("#recipe-list", "Recipes"),
+            ("#recipe-detail", "Recipe"),
+            ("#runs-table", "Runs"),
+        ):
+            self.query_one(sel).border_title = label
         self._render_overview()
         self._load_recipes()
         self._load_runs()
+        self._focus_active_tab()
 
     def on_screen_resume(self) -> None:
         # A run may have just written a report; refresh the history.
         self._load_runs()
+
+    # --- tab navigation / focus --------------------------------------------
+
+    def on_tabbed_content_tab_activated(self, event) -> None:
+        # Any tab switch (digits, ←/→, click) lands focus in the content, so
+        # ↑/↓/Enter work immediately — no mouse needed.
+        self._focus_active_tab()
+
+    def _focus_active_tab(self) -> None:
+        active = self.query_one("#tabs", TabbedContent).active
+        sel = {"overview": "#overview-pane", "recipes": "#recipe-list", "runs": "#runs-table"}.get(active)
+        if sel:
+            try:
+                self.query_one(sel).focus()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def action_prev_tab(self) -> None:
+        self._step_tab(-1)
+
+    def action_next_tab(self) -> None:
+        self._step_tab(1)
+
+    def _step_tab(self, delta: int) -> None:
+        tabs = self.query_one("#tabs", TabbedContent)
+        i = self._TABS.index(tabs.active)
+        tabs.active = self._TABS[(i + delta) % len(self._TABS)]
 
     # --- overview -----------------------------------------------------------
 
@@ -222,17 +263,8 @@ class ProjectDashboardScreen(Screen[None]):
     # --- actions ------------------------------------------------------------
 
     def action_switch(self, tab: str) -> None:
+        # Setting active fires TabActivated → _focus_active_tab moves focus in.
         self.query_one("#tabs", TabbedContent).active = tab
-        # Move focus into the tab's interactive widget so arrows/Enter work — and
-        # blur otherwise, or focus left in a hidden tab reverts the active tab.
-        focus = {"recipes": "#recipe-list", "runs": "#runs-table"}.get(tab)
-        if focus:
-            try:
-                self.query_one(focus).focus()
-            except Exception:  # noqa: BLE001
-                pass
-        else:
-            self.set_focus(None)
 
     def action_back(self) -> None:
         self.app.show_picker()

@@ -216,6 +216,26 @@ async def test_ctrl_n_from_dashboard_switches_project(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_tab_switch_moves_focus_to_content(tmp_path: Path) -> None:
+    # Switching a tab must land focus in its content so ↑/↓/Enter work without
+    # the mouse (the reported UX bug).
+    proj = _project(tmp_path)
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.push_screen(ProjectDashboardScreen(proj, app.config_path))
+        await pilot.pause()
+        await pilot.press("2")  # Recipes
+        await pilot.pause()
+        assert app.focused is not None and app.focused.id == "recipe-list"
+        await pilot.press("3")  # Runs
+        await pilot.pause()
+        assert app.focused.id == "runs-table"
+        await pilot.press("right")  # ←/→ also switch + focus (wraps to Overview)
+        await pilot.pause()
+        assert app.focused.id == "overview-pane"
+
+
+@pytest.mark.asyncio
 async def test_tab_switching(tmp_path: Path) -> None:
     proj = _project(tmp_path)
     app = _app(tmp_path)
