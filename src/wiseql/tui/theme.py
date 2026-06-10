@@ -17,6 +17,14 @@ DataTable {
     border: round $primary 40%;
 }
 
+/* Column header row: a tinted, bold bar so it reads as headers, distinct from
+   the data rows below it. Applies app-wide for consistency. */
+DataTable > .datatable--header {
+    background: $primary 30%;
+    color: $text;
+    text-style: bold;
+}
+
 /* Status / summary / hint lines above a table: matching horizontal inset and a
    little space below the header. */
 #run-status, #conn-hint, #detail-summary, #result-status {

@@ -216,6 +216,64 @@ async def test_runs_tab_ctrl_r_resumes_interrupted_run(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_runs_tab_ctrl_d_diffs_against_previous(tmp_path: Path) -> None:
+    from wiseql.tui.diff import DiffScreen
+
+    proj = _project(tmp_path)  # writes one "late-check" run (3 rows) at 2026-06-07
+    # a second, newer run of the same recipe with a different row count
+    r2 = RunResult(
+        ok=False,
+        steps=[StepRun("recent", "db", "oracle_dev", True, columns=["X"], sample=[(1,)], row_count=5, elapsed_ms=4.0)],
+        terminals=["recent"], elapsed_ms=6.0,
+    )
+    write_report(proj / "runs", r2, "late-check", {}, datetime(2026, 6, 8, 9, 0, 0))
+
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.push_screen(ProjectDashboardScreen(proj, app.config_path))
+        await pilot.pause()
+        await pilot.press("3")  # Runs tab
+        await pilot.pause()
+        table = app.screen.query_one("#runs-table", DataTable)
+        table.move_cursor(row=0)  # newest run (the 5-row one)
+        await pilot.press("ctrl+d")
+        await pilot.pause()
+        assert isinstance(app.screen, DiffScreen)
+        recent = next(s for s in app.screen._diff.steps if s.name == "recent")
+        assert recent.row_delta == 2  # 3 (older) → 5 (newer)
+
+
+@pytest.mark.asyncio
+async def test_runs_tab_ctrl_e_opens_explorer_and_queries(tmp_path: Path) -> None:
+    from textual.widgets import Input
+
+    from wiseql.tui.explorer import ExplorerScreen
+
+    proj = _project(tmp_path)
+    _stage_resumable(proj)  # a run with a `seed` checkpoint (values 1,2,3)
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.push_screen(ProjectDashboardScreen(proj, app.config_path))
+        await pilot.pause()
+        await pilot.press("3")  # Runs tab
+        await pilot.pause()
+        table = app.screen.query_one("#runs-table", DataTable)
+        table.move_cursor(row=0)  # the staged interrupted run (newest), has checkpoints
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        assert isinstance(app.screen, ExplorerScreen)
+        assert app.screen._explorer.tables == ["seed"]
+        # run an ad-hoc aggregate over the frozen checkpoint
+        inp = app.screen.query_one("#sql-input", Input)
+        inp.value = "SELECT COUNT(*) AS n, SUM(n) AS total FROM seed"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert app.screen.last_result.ok
+        assert app.screen.last_result.rows == [(3, 6)]  # 3 rows, 1+2+3
+        assert app.screen.history[-1].startswith("SELECT COUNT(*)")
+
+
+@pytest.mark.asyncio
 async def test_f3_opens_connections(tmp_path: Path) -> None:
     from wiseql.tui.connections import ConnectionsScreen
 
