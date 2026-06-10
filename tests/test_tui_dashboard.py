@@ -236,6 +236,28 @@ async def test_tab_switch_moves_focus_to_content(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_recipes_enter_focuses_detail_esc_returns_to_list(tmp_path: Path) -> None:
+    proj = _project(tmp_path)
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.push_screen(ProjectDashboardScreen(proj, app.config_path))
+        await pilot.pause()
+        await pilot.press("2")  # Recipes → list focused
+        await pilot.pause()
+        assert app.focused.id == "recipe-list"
+        await pilot.press("enter")  # focus the detail pane to scroll it
+        await pilot.pause()
+        assert app.focused.id == "recipe-detail"
+        await pilot.press("escape")  # back to the list (not the picker)
+        await pilot.pause()
+        assert app.focused.id == "recipe-list"
+        assert isinstance(app.screen, ProjectDashboardScreen)
+        await pilot.press("escape")  # now leave the project
+        await pilot.pause()
+        assert isinstance(app.screen, ProjectPickerScreen)
+
+
+@pytest.mark.asyncio
 async def test_tab_switching(tmp_path: Path) -> None:
     proj = _project(tmp_path)
     app = _app(tmp_path)

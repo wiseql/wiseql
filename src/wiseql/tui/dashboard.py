@@ -108,6 +108,9 @@ class ProjectDashboardScreen(Screen[None]):
             ("#runs-table", "Runs"),
         ):
             self.query_one(sel).border_title = label
+        # Discoverable hints for the Recipes-tab focus flow.
+        self.query_one("#recipe-list").border_subtitle = "enter → scroll"
+        self.query_one("#recipe-detail").border_subtitle = "esc → list"
         self._render_overview()
         self._load_recipes()
         self._load_runs()
@@ -208,6 +211,10 @@ class ProjectDashboardScreen(Screen[None]):
         if lv.index is not None and self._recipe_paths:
             self._show_recipe(self._recipe_paths[lv.index])
 
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        # Enter on a recipe → focus the detail pane so ↑/↓ scroll its TOML/SQL.
+        self.query_one("#recipe-detail").focus()
+
     def _show_recipe(self, path: Path) -> None:
         self._current = load_recipe(path)
         recipe = self._current.recipe
@@ -239,6 +246,8 @@ class ProjectDashboardScreen(Screen[None]):
         self.query_one("#recipe-sql", Static).update(
             Syntax(self.recipe_sql_text, "sql", theme="ansi_dark", word_wrap=True)
         )
+        # New recipe → start the detail pane at the top.
+        self.query_one("#recipe-detail").scroll_home(animate=False)
 
     # --- runs ---------------------------------------------------------------
 
@@ -267,7 +276,12 @@ class ProjectDashboardScreen(Screen[None]):
         self.query_one("#tabs", TabbedContent).active = tab
 
     def action_back(self) -> None:
-        self.app.show_picker()
+        # In the Recipes tab, Esc from the detail pane returns to the list;
+        # otherwise Esc leaves the project for the picker.
+        if self.app.focused is self.query_one("#recipe-detail"):
+            self.query_one("#recipe-list").focus()
+        else:
+            self.app.show_picker()
 
     def _config(self):
         from wiseql.config import load_active_config
