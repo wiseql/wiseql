@@ -45,6 +45,15 @@ class ExplorerScreen(Screen[None]):
     ExplorerScreen #explorer-status { padding: 0 1; height: auto; }
     ExplorerScreen #explorer-results { height: 1fr; border: round $primary 50%; }
     ExplorerScreen #history { height: auto; max-height: 50%; }
+    /* Titles render as a filled accent chip so they read as labels. */
+    ExplorerScreen #explorer-side,
+    ExplorerScreen #sql-input,
+    ExplorerScreen #explorer-results {
+        border-title-color: $background;
+        border-title-background: $accent;
+        border-title-style: bold;
+        border-subtitle-color: $text-muted;
+    }
     """
 
     def __init__(self, run_dir: Path, recipe: str = "") -> None:
@@ -72,12 +81,12 @@ class ExplorerScreen(Screen[None]):
         self.title = "WiseQL — Data Explorer"
         self.sub_title = f"{self._recipe} · {self._run_dir.name}" if self._recipe else self._run_dir.name
         self._explorer = CheckpointExplorer(self._run_dir)
-        self.query_one("#explorer-side").border_title = "steps & history"
+        self.query_one("#explorer-side").border_title = " steps & history "
         sql = self.query_one("#sql-input", Input)
-        sql.border_title = "SQL"
+        sql.border_title = " SQL "
         sql.border_subtitle = "Enter to run"
         results = self.query_one("#explorer-results", DataTable)
-        results.border_title = "results"
+        results.border_title = " results "
 
         infos = self._explorer.table_info()
         if infos:

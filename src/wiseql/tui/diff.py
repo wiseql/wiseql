@@ -64,16 +64,22 @@ class DiffScreen(Screen[None]):
     DEFAULT_CSS = """
     DiffScreen #diff-summary {
         border: round $primary 50%;
-        border-title-color: $accent;
         height: auto;
         padding: 0 1;
         margin: 1 1 0 1;
     }
     DiffScreen #diff-table {
         border: round $primary 50%;
-        border-title-color: $accent;
         height: 1fr;
         margin: 0 1 1 1;
+    }
+    /* Titles render as a filled accent chip so they read as labels, not as
+       part of the content row. */
+    DiffScreen #diff-summary, DiffScreen #diff-table {
+        border-title-color: $background;
+        border-title-background: $accent;
+        border-title-style: bold;
+        border-subtitle-color: $text-muted;
     }
     """
 
@@ -94,7 +100,7 @@ class DiffScreen(Screen[None]):
 
         # Summary panel — framed + titled, so it reads as a labelled window.
         summary = self.query_one("#diff-summary", Static)
-        summary.border_title = "Diff — comparing two runs"
+        summary.border_title = " Diff — comparing two runs "
         av = "[green]ok[/]" if d.a_ok else "[red]failed[/]"
         bv = "[green]ok[/]" if d.b_ok else "[red]failed[/]"
         lines: list[str] = []
@@ -118,7 +124,7 @@ class DiffScreen(Screen[None]):
 
         # Results table — framed + titled.
         table = self.query_one("#diff-table", DataTable)
-        table.border_title = "per-step changes"
+        table.border_title = " per-step changes "
         table.border_subtitle = "Δ = B − A  ·  changed rows in yellow  ·  Esc = back"
         for col in ("step", "A rows", "B rows", "Δ", "status", "notes"):
             table.add_column(col, key=col)
