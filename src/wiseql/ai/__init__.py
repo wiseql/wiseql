@@ -73,10 +73,57 @@ class NullProvider(AIProvider):
         return AIResult(available=False)
 
 
-def get_provider() -> AIProvider:
+@dataclass(frozen=True)
+class AIStatus:
+    """A human-facing snapshot of the AI add-on, shared by the CLI and TUI."""
+
+    enabled: bool
+    installed: bool
+    reachable: bool
+    model_present: bool
+    model: str
+    host: str
+    detail: str
+
+    @property
+    def ready(self) -> bool:
+        return self.enabled and self.installed and self.reachable and self.model_present
+
+
+def describe_status(settings=None) -> AIStatus:
+    """Probe the AI add-on for display. Network I/O when enabled — call off the
+    UI render path (a worker)."""
+    from wiseql.ai.settings import AISettings, load_ai_settings
+
+    s = settings if isinstance(settings, AISettings) else load_ai_settings()
+    if not s.enabled:
+        return AIStatus(False, False, False, False, s.model, s.host,
+                        "AI is off — run `wiseql ai setup` to enable.")
+    try:
+        import ollama  # noqa: F401 — presence check only
+    except Exception:  # noqa: BLE001
+        return AIStatus(True, False, False, False, s.model, s.host,
+                        "the [ai] extra isn't installed — pip install 'wiseql[ai]'")
+    from wiseql.ai.ollama import OllamaProvider
+
+    reachable, present, detail = OllamaProvider(s.model, s.host).probe()
+    return AIStatus(True, True, reachable, present, s.model, s.host, detail)
+
+
+def get_provider(settings=None) -> AIProvider:
     """Return the active AI provider.
 
-    Sprint 6 will detect the ``[ai]`` extra + Ollama and return an
-    ``OllamaProvider``; until then this is always the NullProvider.
+    ``NullProvider`` unless AI is *enabled* (``wiseql ai setup`` wrote
+    ``ai.toml``); when enabled, an ``OllamaProvider`` — whose ``is_available``
+    still gates on a live check, so "enabled but Ollama down / package missing"
+    degrades to a disabled feature rather than an error. ``settings`` may be
+    passed to skip re-reading the state file.
     """
-    return NullProvider()
+    from wiseql.ai.settings import AISettings, load_ai_settings
+
+    s = settings if isinstance(settings, AISettings) else load_ai_settings()
+    if not s.enabled:
+        return NullProvider()
+    from wiseql.ai.ollama import OllamaProvider
+
+    return OllamaProvider(s.model, s.host)

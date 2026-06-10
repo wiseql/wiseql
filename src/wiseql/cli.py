@@ -27,6 +27,9 @@ app.add_typer(conn_app, name="conn")
 context_app = typer.Typer(help="Project context (schema sync).")
 app.add_typer(context_app, name="context")
 
+ai_app = typer.Typer(help="Optional AI add-on (Ollama/Gemma): status, setup, disable.")
+app.add_typer(ai_app, name="ai")
+
 console = Console()
 _SEVERITY_STYLE = {"error": "bold red", "warning": "yellow"}
 
@@ -594,6 +597,85 @@ def context_sync(
 
     path = write_tables_md(root / "context" / "tables.md", tables, project_name=root.name)
     console.print(f"[green]✓[/] synced {len(tables)} table(s) → [dim]{path}[/]")
+
+
+@ai_app.command("status")
+def ai_status() -> None:
+    """Show the AI add-on state (enabled, model, reachability)."""
+    from wiseql.ai import describe_status
+
+    st = describe_status()
+    mark = "[green]✓ ready[/]" if st.ready else ("[yellow]· off[/]" if not st.enabled else "[bold red]✗ unavailable[/]")
+    console.print(f"AI add-on: {mark}")
+    console.print(f"  [dim]enabled:[/] {st.enabled}   [dim]model:[/] {st.model}   [dim]host:[/] {st.host}")
+    if st.enabled:
+        console.print(f"  [dim]installed:[/] {st.installed}   [dim]reachable:[/] {st.reachable}   [dim]model pulled:[/] {st.model_present}")
+    console.print(f"  [dim]{escape_md(st.detail)}[/]")
+
+
+@ai_app.command("disable")
+def ai_disable() -> None:
+    """Turn the AI add-on off (the base app is unaffected either way)."""
+    from wiseql.ai.settings import load_ai_settings, save_ai_settings
+
+    s = load_ai_settings()
+    s.enabled = False
+    path = save_ai_settings(s)
+    console.print(f"[green]✓[/] AI disabled [dim]({path})[/]")
+
+
+@ai_app.command("setup")
+def ai_setup(
+    model: str = typer.Option(None, "--model", "-m", help="Ollama model tag (default: keep current / gemma3)."),
+    host: str = typer.Option(None, "--host", help="Ollama host URL (default: keep current / localhost:11434)."),
+) -> None:
+    """Detect Ollama, pull the model, and enable AI features."""
+    from wiseql.ai.settings import load_ai_settings, save_ai_settings
+
+    s = load_ai_settings()
+    s.model = model or s.model
+    s.host = host or s.host
+
+    try:
+        import ollama
+    except ImportError:
+        console.print(
+            r"[bold red]the \[ai] extra isn't installed.[/]" "\n"
+            r"  Install it:  [b]uv tool install 'wiseql\[ai]'[/]  (or  pip install 'wiseql\[ai]')"
+        )
+        raise typer.Exit(code=1)
+
+    from wiseql.ai.ollama import OllamaProvider
+
+    client = ollama.Client(host=s.host)
+    reachable, model_present, detail = OllamaProvider(s.model, s.host, client=client).probe()
+    if not reachable:
+        console.print(
+            f"[bold red]✗ Ollama not reachable at {s.host}[/] — start it (e.g. [b]ollama serve[/]).\n"
+            f"  [dim]{escape_md(detail)}[/]"
+        )
+        raise typer.Exit(code=1)
+
+    if not model_present:
+        console.print(f"Pulling model [b]{s.model}[/] via Ollama … [dim](first time can be slow)[/]")
+        try:
+            client.pull(s.model)
+        except Exception as exc:  # noqa: BLE001 — surface Ollama's own error
+            console.print(f"[bold red]✗ could not pull '{s.model}':[/] {str(exc).strip()}")
+            raise typer.Exit(code=1)
+
+    s.enabled = True
+    path = save_ai_settings(s)
+    console.print(
+        f"[green]✓ AI enabled[/] — model [b]{s.model}[/] on [dim]{s.host}[/] [dim]({path})[/]\n"
+        "  Try [b]wiseql ai status[/], or the AI actions in the TUI."
+    )
+
+
+def escape_md(text: str) -> str:
+    from rich.markup import escape
+
+    return escape(text)
 
 
 def main() -> None:
