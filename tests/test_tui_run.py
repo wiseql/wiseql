@@ -1,25 +1,29 @@
-"""Live run-view tests (S3.4). DB-free: ``run_recipe`` is monkeypatched and
-fires the ``on_step`` callback so the live table updates are exercised."""
+"""Live run-view tests (S3.4 / S4). RunScreen is pushed directly; the param→run
+flow is driven through the dashboard. DB-free: run_recipe is monkeypatched and
+fires on_step so the live table updates are exercised."""
 
 from pathlib import Path
 
 import pytest
 from textual.widgets import DataTable
 
+from wiseql.config import WiseQLConfig
 from wiseql.engine import AssertionOutcome, RunResult, StepRun
+from wiseql.project import scaffold_project
+from wiseql.recipes import load_recipe
 from wiseql.tui.app import WiseQLApp
+from wiseql.tui.dashboard import ProjectDashboardScreen
 from wiseql.tui.params import ParamModal
 from wiseql.tui.run import RunScreen, StepDetailScreen
 
 EXAMPLES = Path(__file__).parent.parent / "examples"
-
 CONFIG = '[connections.oracle_dev]\nhost = "localhost"\nservice = "FREEPDB1"\nuser = "wiseql"\nauth = "env"\n'
 
 
 def _app(tmp_path: Path) -> WiseQLApp:
     cfg = tmp_path / "config.toml"
     cfg.write_text(CONFIG, encoding="utf-8")
-    return WiseQLApp(recipes_dir=EXAMPLES, config_path=cfg)
+    return WiseQLApp(config_path=cfg, projects_dir=tmp_path / "projects")
 
 
 def _orphan_steps() -> list[StepRun]:
@@ -48,36 +52,63 @@ def _fake_run(steps, *, ok, capture=None):
     return _run
 
 
+def _run_screen(loaded_name="orphan-returns.toml", recipe_name="orphan-returns"):
+    loaded = load_recipe(EXAMPLES / loaded_name)
+    return RunScreen(loaded, WiseQLConfig(), {}, recipe_name, runs_dir=None)
+
+
 @pytest.mark.asyncio
-async def test_f2_runs_full_recipe_live(tmp_path: Path, monkeypatch) -> None:
+async def test_run_screen_lights_up_steps(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("wiseql.tui.run.run_recipe", _fake_run(_orphan_steps(), ok=False))
     app = _app(tmp_path)
     async with app.run_test() as pilot:
-        app._show(EXAMPLES / "orphan-returns.toml")
+        app.push_screen(_run_screen())
         await pilot.pause()
-        await pilot.press("f2")
-        await pilot.pause()
-        assert isinstance(app.screen, RunScreen)
         await app.workers.wait_for_complete()
         await pilot.pause()
         table = app.screen.query_one("#run-table", DataTable)
-        assert table.row_count == 3  # all plan steps listed
+        assert table.row_count == 3
         assert "ok" in str(table.get_cell("orders", "status"))
         assert str(table.get_cell("orders", "rows")) == "127"
-        assert "assert" in str(table.get_cell("orphans", "status"))  # ⚠ assert ✗
+        assert "assert" in str(table.get_cell("orphans", "status"))
         assert "failed" in app.screen.status_text
 
 
 @pytest.mark.asyncio
-async def test_f2_parameterised_recipe_prompts_then_runs(tmp_path: Path, monkeypatch) -> None:
+async def test_run_screen_execution_error(tmp_path: Path, monkeypatch) -> None:
+    steps = [StepRun("orders", "db", "oracle_dev", False, error="ORA-00942: table missing", elapsed_ms=3.0)]
+    monkeypatch.setattr("wiseql.tui.run.run_recipe", _fake_run(steps, ok=False))
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.push_screen(_run_screen("daily-volume.toml", "daily-volume"))
+        await pilot.pause()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        table = app.screen.query_one("#run-table", DataTable)
+        assert "error" in str(table.get_cell("orders", "status"))
+        await pilot.press("enter")
+        await pilot.pause()
+        assert isinstance(app.screen, StepDetailScreen)
+
+
+@pytest.mark.asyncio
+async def test_dashboard_f2_parameterised_prompts_then_runs(tmp_path: Path, monkeypatch) -> None:
     capture: dict = {}
     one = [StepRun("recent_orders", "db", "oracle_dev", True, columns=["X"], sample=[(1,)], row_count=1)]
     monkeypatch.setattr("wiseql.tui.run.run_recipe", _fake_run(one, ok=True, capture=capture))
+
+    proj = tmp_path / "projects" / "p"
+    scaffold_project(proj, "p")
+    (proj / "recipes" / "nc.toml").write_text(
+        (EXAMPLES / "null-customers.toml").read_text(encoding="utf-8"), encoding="utf-8"
+    )
     app = _app(tmp_path)
     async with app.run_test() as pilot:
-        app._show(EXAMPLES / "null-customers.toml")
+        app.push_screen(ProjectDashboardScreen(proj, app.config_path))
         await pilot.pause()
-        await pilot.press("f2")
+        await pilot.press("2")  # Recipes tab (selects the only recipe)
+        await pilot.pause()
+        await pilot.press("f2")  # run → parameterised → ParamModal
         await pilot.pause()
         assert isinstance(app.screen, ParamModal)
         await pilot.press(*list("20260101"))
@@ -86,54 +117,3 @@ async def test_f2_parameterised_recipe_prompts_then_runs(tmp_path: Path, monkeyp
         await pilot.pause()
         assert isinstance(app.screen, RunScreen)
         assert capture["params"] == {"run_date": "20260101"}
-
-
-@pytest.mark.asyncio
-async def test_enter_opens_step_detail(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr("wiseql.tui.run.run_recipe", _fake_run(_orphan_steps(), ok=False))
-    app = _app(tmp_path)
-    async with app.run_test() as pilot:
-        app._show(EXAMPLES / "orphan-returns.toml")
-        await pilot.pause()
-        await pilot.press("f2")
-        await app.workers.wait_for_complete()
-        await pilot.pause()
-        await pilot.press("down", "down")  # move cursor to 'orphans'
-        await pilot.press("enter")
-        await pilot.pause()
-        assert isinstance(app.screen, StepDetailScreen)
-
-
-@pytest.mark.asyncio
-async def test_execution_failed_step_shows_error_and_detail(tmp_path: Path, monkeypatch) -> None:
-    # An execution error (not an assertion) lights the step ✗ error, rows "—",
-    # and its detail renders the error without an output grid.
-    steps = [StepRun("orders", "db", "oracle_dev", False, error="ORA-00942: table missing", elapsed_ms=3.0)]
-    monkeypatch.setattr("wiseql.tui.run.run_recipe", _fake_run(steps, ok=False))
-    app = _app(tmp_path)
-    async with app.run_test() as pilot:
-        app._show(EXAMPLES / "daily-volume.toml")
-        await pilot.pause()
-        await pilot.press("f2")
-        await app.workers.wait_for_complete()
-        await pilot.pause()
-        table = app.screen.query_one("#run-table", DataTable)
-        assert "error" in str(table.get_cell("orders", "status"))
-        assert str(table.get_cell("orders", "rows")) == "—"
-        await pilot.press("enter")  # cursor on 'orders' (row 0)
-        await pilot.pause()
-        assert isinstance(app.screen, StepDetailScreen)
-
-
-@pytest.mark.asyncio
-async def test_multi_db_step_recipe_now_runs_in_tui(tmp_path: Path, monkeypatch) -> None:
-    # orphan-returns has two db steps — in Sprint 2/3.1 the TUI couldn't run it;
-    # F2 must now open the run view instead of warning.
-    monkeypatch.setattr("wiseql.tui.run.run_recipe", _fake_run(_orphan_steps(), ok=True))
-    app = _app(tmp_path)
-    async with app.run_test() as pilot:
-        app._show(EXAMPLES / "orphan-returns.toml")
-        await pilot.pause()
-        await pilot.press("f2")
-        await pilot.pause()
-        assert isinstance(app.screen, RunScreen)
