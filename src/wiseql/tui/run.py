@@ -27,6 +27,8 @@ _RUN_COLUMNS = ("step", "kind", "status", "rows", "ms")
 def _status_markup(s: StepRun) -> str:
     if not s.ok:
         return "[bold red]✗ error[/]"
+    if s.restored:
+        return "[cyan]↻ restored[/]"
     if s.assert_failed:
         return f"[yellow]⚠ assert ✗[/] [dim]({s.on_fail})[/]"
     return "[green]✓ ok[/]"
@@ -102,7 +104,7 @@ class RunScreen(Screen[None]):
 
     def __init__(
         self, loaded, config, params: dict | None = None, recipe_name: str = "recipe",
-        runs_dir=None,
+        runs_dir=None, resume_from=None,
     ) -> None:
         super().__init__()
         self._loaded = loaded
@@ -110,6 +112,7 @@ class RunScreen(Screen[None]):
         self._params = params or {}
         self._recipe_name = recipe_name
         self._runs_dir = runs_dir  # None → run not persisted (no active project)
+        self._resume_from = resume_from  # a prior run dir → resume into it (S5.1)
         self._names: list[str] = []
         self._result: RunResult | None = None
         self.status_text = ""
@@ -129,7 +132,8 @@ class RunScreen(Screen[None]):
             step = self._loaded.recipe.steps[name]
             table.add_row(name, "db" if step.source else "local", "· pending", "", "", key=name)
             self._names.append(name)
-        self._set_status(f"Running [b]{self._recipe_name}[/] …")
+        verb = "Resuming" if self._resume_from is not None else "Running"
+        self._set_status(f"{verb} [b]{self._recipe_name}[/] …")
         table.focus()
         self._run_worker()
 
@@ -144,7 +148,7 @@ class RunScreen(Screen[None]):
 
         result = run_recipe(
             self._loaded, self._config, params=self._params, on_step=on_step,
-            runs_dir=self._runs_dir,
+            runs_dir=self._runs_dir, resume_from=self._resume_from,
         )
         self.app.call_from_thread(self._on_done, result)
 
@@ -157,7 +161,8 @@ class RunScreen(Screen[None]):
             return
         table.update_cell(name, "status", _status_markup(step_run), update_width=True)
         table.update_cell(name, "rows", str(step_run.row_count) if step_run.ok else "—", update_width=True)
-        table.update_cell(name, "ms", f"{step_run.elapsed_ms} ms", update_width=True)
+        ms = "—" if step_run.restored else f"{step_run.elapsed_ms} ms"
+        table.update_cell(name, "ms", ms, update_width=True)
 
     def _on_done(self, result: RunResult) -> None:
         self._result = result

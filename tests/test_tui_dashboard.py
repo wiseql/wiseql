@@ -162,6 +162,59 @@ async def test_runs_tab_opens_report_detail(tmp_path: Path) -> None:
         assert isinstance(app.screen, ReportDetailScreen)
 
 
+def _stage_resumable(proj: Path) -> Path:
+    """Add a DOUBLE recipe + an interrupted run (seed checkpointed) to a project."""
+    import datetime
+
+    import duckdb
+
+    from wiseql.engine.execute import _write_checkpoint
+    from wiseql.recipes import load_recipe
+    from wiseql.report import sql_fingerprint, write_manifest
+
+    body = (
+        '[recipe]\nname = "double"\n'
+        '[steps.seed]\nsource = "oracle_dev"\nsql = "SELECT n FROM nums"\n'
+        '[steps.derived]\ninputs = ["seed"]\nsql = "SELECT n * 2 AS n2 FROM seed"\n'
+    )
+    recipe = proj / "recipes" / "double.toml"
+    recipe.write_text(body, encoding="utf-8")
+    run_dir = proj / "runs" / "20260610T120000_000000"
+    cdir = run_dir / "checkpoints"
+    cdir.mkdir(parents=True)
+    duck = duckdb.connect()
+    duck.execute("CREATE TABLE seed AS SELECT * FROM (VALUES (1),(2),(3)) t(n)")
+    _write_checkpoint(duck, cdir, "seed")
+    duck.close()
+    write_manifest(
+        run_dir, recipe_name="double", params={},
+        step_sql=sql_fingerprint(load_recipe(recipe).resolved_sql), status="failed",
+        started_at=datetime.datetime(2026, 6, 10, 12, 0, 0),
+    )
+    return run_dir
+
+
+@pytest.mark.asyncio
+async def test_runs_tab_ctrl_r_resumes_interrupted_run(tmp_path: Path) -> None:
+    from wiseql.tui.run import RunScreen
+
+    proj = _project(tmp_path)
+    run_dir = _stage_resumable(proj)
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.push_screen(ProjectDashboardScreen(proj, app.config_path))
+        await pilot.pause()
+        await pilot.press("3")  # Runs tab
+        await pilot.pause()
+        # newest run is the staged interrupted "double" (sorts after the seeded one)
+        table = app.screen.query_one("#runs-table", DataTable)
+        table.move_cursor(row=0)
+        await pilot.press("ctrl+r")
+        await pilot.pause()
+        assert isinstance(app.screen, RunScreen)
+        assert app.screen._resume_from == run_dir
+
+
 @pytest.mark.asyncio
 async def test_f3_opens_connections(tmp_path: Path) -> None:
     from wiseql.tui.connections import ConnectionsScreen

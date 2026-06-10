@@ -54,6 +54,7 @@ class StepRun:
     error: str = ""
     assertions: list[AssertionOutcome] = field(default_factory=list)
     on_fail: str = "stop"  # policy from the recipe, echoed for display
+    restored: bool = False  # skipped on a resume — loaded from its checkpoint (S5.1)
 
     @property
     def assert_failed(self) -> bool:
@@ -97,6 +98,7 @@ def run_recipe(
     environ=None,
     on_step=None,
     runs_dir=None,
+    resume_from=None,
 ) -> RunResult:
     """Execute every step of a recipe through DuckDB and return per-step results.
 
@@ -107,11 +109,30 @@ def run_recipe(
     ``step_run=None`` when a step starts running, and with the completed
     ``StepRun`` when it finishes — so a live UI can light up the DAG.
 
-    If ``runs_dir`` is given, the run is persisted to
-    ``runs_dir/<timestamp>/report.json`` and ``result.report_path`` is set — so
-    CLI and TUI runs both produce reports from this one place.
+    If ``runs_dir`` is given, the run gets its own ``runs_dir/<timestamp>/``: a
+    ``run.json`` manifest (status ``running`` → ``ok``/``failed``), a
+    ``report.json`` at the end, and a ``checkpoints/<step>.parquet`` per
+    fully-successful step. ``result.report_path`` is set.
+
+    If ``resume_from`` (a prior run dir) is given, its checkpoints are restored
+    into DuckDB and those steps are skipped (``StepRun.restored``); execution
+    continues from the first un-checkpointed step, into the *same* run dir.
+    Resume refuses (run-level error) if the manifest is missing, params differ,
+    or a checkpointed step's resolved SQL no longer matches — stale checkpoints
+    must never feed a changed recipe (S5.1).
     """
     from datetime import datetime
+
+    from wiseql.report import (
+        checkpoint_steps,
+        checkpoints_dir,
+        read_manifest,
+        run_dir_for,
+        set_manifest_status,
+        sql_fingerprint,
+        write_manifest,
+        write_report_in,
+    )
 
     started_at = datetime.now()
 
@@ -127,6 +148,43 @@ def run_recipe(
         reason = next((i.message for i in plan.issues if i.severity == "error"), "invalid plan")
         return RunResult(ok=False, error=reason)
 
+    fingerprint = sql_fingerprint(loaded.resolved_sql)
+
+    # Resolve the run dir: resume into the prior one, else a fresh stamped dir.
+    run_dir = None
+    cdir = None
+    restored_names: set[str] = set()
+    if resume_from is not None:
+        from pathlib import Path
+
+        run_dir = Path(resume_from)
+        manifest = read_manifest(run_dir)
+        if manifest is None:
+            return RunResult(ok=False, error=f"cannot resume: no run.json in {run_dir}")
+        if (manifest.get("params") or {}) != (params or {}):
+            return RunResult(ok=False, error="cannot resume: parameters differ from the original run")
+        done = checkpoint_steps(run_dir)
+        prior_fp = manifest.get("step_sql") or {}
+        drifted = sorted(n for n in done if prior_fp.get(n) != fingerprint.get(n))
+        if drifted:
+            return RunResult(
+                ok=False,
+                error=f"cannot resume: recipe changed for step(s) {', '.join(drifted)} — start a fresh run",
+            )
+        started_at = datetime.fromisoformat(manifest["started_at"])  # keep original run identity
+        restored_names = {n for n in plan.order if n in done}
+        if restored_names == set(plan.order):
+            # Every step is checkpointed — restoring all and reporting would skip
+            # assertion re-evaluation and could flip a failed verdict to ok.
+            # There is nothing left to execute; refuse rather than misreport.
+            return RunResult(ok=False, error="nothing to resume — the run already completed")
+    elif runs_dir is not None:
+        run_dir = run_dir_for(runs_dir, started_at)
+        write_manifest(
+            run_dir, recipe_name=recipe.recipe.name, params=params or {},
+            step_sql=fingerprint, status="running", started_at=started_at,
+        )
+
     import duckdb
 
     run_start = time.perf_counter()
@@ -135,7 +193,28 @@ def run_recipe(
     result = RunResult(ok=True, terminals=_terminals(recipe))
 
     try:
+        if restored_names:
+            cdir = checkpoints_dir(run_dir)
+            for name in plan.order:  # restore in dependency order so downstream tables exist
+                if name not in restored_names:
+                    continue
+                step = recipe.steps[name]
+                restored = _restore_checkpoint(duck, cdir, name, step)
+                result.steps.append(restored)
+                _notify(name, restored)
+            # Re-arm + refresh fingerprints to the current recipe. The drift
+            # check already proved the checkpointed steps are unchanged, so this
+            # only updates not-yet-run steps — keeping the manifest accurate for
+            # a *subsequent* resume (else newly-checkpointed steps carry stale
+            # fingerprints and get spuriously flagged next time).
+            write_manifest(
+                run_dir, recipe_name=recipe.recipe.name, params=params or {},
+                step_sql=fingerprint, status="running", started_at=started_at,
+            )
+
         for name in plan.order:
+            if name in restored_names:
+                continue
             step = recipe.steps[name]
             started = time.perf_counter()
             sql = (loaded.resolved_sql.get(name) or "").strip().rstrip(";").strip()
@@ -171,6 +250,16 @@ def run_recipe(
             if not self_run.ok:
                 result.ok = False
                 break
+
+            # Checkpoint a step that completed and let the run continue. A
+            # stop-failure is the failed step itself — never checkpoint it, so
+            # checkpoints stay a clean prefix a resume can trust.
+            stop_failure = self_run.assert_failed and self_run.on_fail == "stop"
+            if run_dir is not None and not stop_failure:
+                if cdir is None:
+                    cdir = checkpoints_dir(run_dir)
+                _write_checkpoint(duck, cdir, name)
+
             if self_run.assert_failed and self_run.on_fail != "warn":
                 # stop + report_samples are real failures; only stop halts the run.
                 result.ok = False
@@ -186,12 +275,10 @@ def run_recipe(
 
     result.elapsed_ms = _ms(run_start)
 
-    if runs_dir is not None:
-        from wiseql.report import write_report
-
-        recipe_name = recipe.recipe.name
-        path = write_report(runs_dir, result, recipe_name, params or {}, started_at)
+    if run_dir is not None:
+        path = write_report_in(run_dir, result, recipe.recipe.name, params or {}, started_at)
         result.report_path = str(path)
+        set_manifest_status(run_dir, "ok" if result.ok else "failed")
 
     return result
 
@@ -230,6 +317,33 @@ def _run_local_step(duck, name, inputs, sql) -> StepRun:
     # step's SQL references them directly (e.g. FROM orders, FROM returns).
     duck.execute(f"CREATE TABLE {_ident(name)} AS {sql}")
     return _collect(duck, run)
+
+
+def _sqlstr(value) -> str:
+    """Escape a value for a DuckDB single-quoted string literal (e.g. a path)."""
+    return str(value).replace("'", "''")
+
+
+def _write_checkpoint(duck, cdir, name: str) -> None:
+    """COPY a step's DuckDB table to ``<cdir>/<name>.parquet``, atomically.
+
+    DuckDB's native Parquet writer needs no pyarrow (keeps the base package
+    lean, per S2.3). Write to ``.tmp`` then rename so a process killed mid-COPY
+    never leaves a truncated file a resume would trust — a ``.parquet`` existing
+    means it is complete.
+    """
+    final = cdir / f"{name}.parquet"
+    tmp = cdir / f"{name}.parquet.tmp"
+    duck.execute(f"COPY {_ident(name)} TO '{_sqlstr(tmp)}' (FORMAT PARQUET)")
+    tmp.replace(final)
+
+
+def _restore_checkpoint(duck, cdir, name: str, step) -> StepRun:
+    """Load a step's checkpoint parquet back into a DuckDB table (resume path)."""
+    run = StepRun(name=name, kind="db" if step.source else "local", source=step.source, ok=False, restored=True)
+    path = cdir / f"{name}.parquet"
+    duck.execute(f"CREATE TABLE {_ident(name)} AS SELECT * FROM read_parquet('{_sqlstr(path)}')")
+    return _collect(duck, run)  # repopulate columns/row_count/sample; ok=True (restored stays True)
 
 
 def _evaluate_assertions(duck, run: StepRun, spec, prior_steps: list[StepRun]) -> None:
