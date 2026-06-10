@@ -56,6 +56,7 @@ class _RunRow:
     result_markup: str
     steps_text: str
     resumable: bool
+    has_checkpoints: bool
 
 
 def _collect_runs(runs_dir: Path) -> list[_RunRow]:
@@ -77,12 +78,12 @@ def _collect_runs(runs_dir: Path) -> list[_RunRow]:
             info = report_info(report)
             result = "[green]✓ ok[/]" if info.ok else "[bold red]✗ failed[/]"
             resumable = (not info.ok) and has_work and status in ("failed", "running")
-            rows.append(_RunRow(d, report, info.recipe, info.started_at, result, str(info.step_count), resumable))
+            rows.append(_RunRow(d, report, info.recipe, info.started_at, result, str(info.step_count), resumable, bool(done)))
         elif manifest is not None:
             rows.append(_RunRow(
                 d, None, manifest.get("recipe", "?"), manifest.get("started_at", "?"),
                 "[yellow]⚠ interrupted[/]", f"{len(done)} ✓",
-                has_work and status in ("running", "failed"),
+                has_work and status in ("running", "failed"), bool(done),
             ))
     return rows
 
@@ -101,6 +102,7 @@ class ProjectDashboardScreen(Screen[None]):
         Binding("f2", "run", "Run"),
         Binding("ctrl+r", "resume", "Resume"),
         Binding("ctrl+d", "diff", "Diff vs prev"),
+        Binding("ctrl+e", "explore", "Explore data"),
         Binding("f3", "connections", "Connections"),
         Binding("ctrl+t", "sync", "Sync schema"),
         Binding("ctrl+n", "new_project", "New project"),
@@ -173,7 +175,7 @@ class ProjectDashboardScreen(Screen[None]):
         # Discoverable hints for the Recipes-tab focus flow.
         self.query_one("#recipe-list").border_subtitle = "enter → scroll"
         self.query_one("#recipe-detail").border_subtitle = "esc → list"
-        self.query_one("#runs-table").border_subtitle = "enter → detail · ctrl+r → resume · ctrl+d → diff"
+        self.query_one("#runs-table").border_subtitle = "enter → detail · ctrl+r resume · ctrl+d diff · ctrl+e explore"
         self._render_overview()
         self._load_recipes()
         self._load_runs()
@@ -436,6 +438,21 @@ class ProjectDashboardScreen(Screen[None]):
             a_label=older.run_dir.name, b_label=newer.run_dir.name,
         )
         self.app.push_screen(DiffScreen(d))
+
+    def action_explore(self) -> None:
+        """Open the Data Explorer over the selected run's checkpoints."""
+        table = self.query_one("#runs-table", DataTable)
+        idx = table.cursor_row
+        if not (0 <= idx < len(self._run_rows)):
+            self.notify("select a run first (Runs tab)", severity="warning")
+            return
+        row = self._run_rows[idx]
+        if not row.has_checkpoints:
+            self.notify("this run has no checkpoints to explore", severity="warning")
+            return
+        from wiseql.tui.explorer import ExplorerScreen
+
+        self.app.push_screen(ExplorerScreen(row.run_dir, row.recipe))
 
     def _find_recipe_by_name(self, name: str):
         """Find the LoadResult whose [recipe].name matches (manifests store the name)."""
