@@ -6,10 +6,31 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from wiseql.cli import app
-from wiseql.context import Column, Table, merge_tables_md, render_auto_block, write_tables_md
+from wiseql.context import (
+    Column,
+    Table,
+    merge_tables_md,
+    read_context,
+    render_auto_block,
+    write_tables_md,
+)
 from wiseql.project import AUTO_END, AUTO_START, scaffold_project
 
 runner = CliRunner()
+
+
+def test_read_context_concatenates_tables_and_domain(tmp_path: Path) -> None:
+    ctx = tmp_path / "context"
+    ctx.mkdir()
+    (ctx / "tables.md").write_text("ORDERS(order_id, customer_id)", encoding="utf-8")
+    (ctx / "domain.md").write_text("a customer places orders", encoding="utf-8")
+    text = read_context(tmp_path)
+    assert "ORDERS(order_id" in text and "places orders" in text
+
+
+def test_read_context_empty_when_absent(tmp_path: Path) -> None:
+    assert read_context(None) == ""
+    assert read_context(tmp_path) == ""  # no context/ dir
 
 
 def _fake_tables() -> list[Table]:

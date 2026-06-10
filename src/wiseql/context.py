@@ -146,3 +146,28 @@ def write_tables_md(path: Path, tables: list[Table], project_name: str = "projec
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(merged, encoding="utf-8")
     return path
+
+
+# Cap the grounding text so a large schema can't blow up an AI prompt (S6.2).
+CONTEXT_CHAR_CAP = 8000
+
+
+def read_context(project_root: Path | None) -> str:
+    """Concatenate a project's ``context/{tables,domain}.md`` for AI grounding.
+
+    Returns "" when there's no project or no context files — the AI prompts
+    handle an empty context gracefully. Capped so a huge schema can't bloat the
+    prompt.
+    """
+    if project_root is None:
+        return ""
+    ctx = Path(project_root) / "context"
+    parts: list[str] = []
+    for name in ("tables.md", "domain.md"):
+        f = ctx / name
+        if f.is_file():
+            try:
+                parts.append(f.read_text(encoding="utf-8"))
+            except OSError:
+                pass
+    return "\n\n".join(parts).strip()[:CONTEXT_CHAR_CAP]
