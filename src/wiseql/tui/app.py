@@ -142,6 +142,26 @@ class WiseQLApp(App[None]):
 
         return load_active_config(self.config_path).config.projects_root
 
+    # --- project navigation (new picker → dashboard model) ------------------
+
+    def open_project(self, path: Path) -> None:
+        """Make ``path`` the active project and show its dashboard."""
+        from wiseql.tui.dashboard import ProjectDashboardScreen
+
+        self.active_project = Path(path)
+        self.sub_title = f"project · {self.active_project.name}"
+        self.push_screen(ProjectDashboardScreen(Path(path), self.config_path))
+
+    def show_picker(self) -> None:
+        """Return to the project picker (the app's entry screen)."""
+        from wiseql.tui.picker import ProjectPickerScreen
+
+        # If a picker is already underneath, pop back to it; else show a fresh one.
+        if any(isinstance(s, ProjectPickerScreen) for s in self.screen_stack[:-1]):
+            self.pop_screen()
+        else:
+            self.push_screen(ProjectPickerScreen(self.projects_dir))
+
     # --- layout -------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
