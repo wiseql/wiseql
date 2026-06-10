@@ -2,20 +2,11 @@
 provider wiring (S6.1) exercised through an injected fake client — no live
 Ollama and no `ollama` package required."""
 
-import importlib.util
-
-import pytest
+import sys
 
 from wiseql.ai import AIProvider, AIResult, NullProvider, describe_status, get_provider
 from wiseql.ai.ollama import OllamaProvider
 from wiseql.ai.settings import AISettings
-
-# A few tests assert the "not installed" path, which is only authentic in a venv
-# without the [ai] extra (the base `make test` env). Skip them if `ollama` is present.
-_no_ollama = pytest.mark.skipif(
-    importlib.util.find_spec("ollama") is not None,
-    reason="assumes the base venv without the [ai] extra",
-)
 
 
 class FakeClient:
@@ -128,8 +119,9 @@ def test_describe_status_off() -> None:
     assert "off" in st.detail.lower()
 
 
-@_no_ollama
-def test_describe_status_enabled_but_not_installed() -> None:
-    # base test venv has no `ollama` package → authentic not-installed path
+def test_describe_status_enabled_but_not_installed(monkeypatch) -> None:
+    # Simulate the [ai] extra being absent regardless of the venv's real state,
+    # so this is deterministic whether or not `make run` added ollama.
+    monkeypatch.setitem(sys.modules, "ollama", None)  # `import ollama` → ImportError
     st = describe_status(AISettings(enabled=True, model="gemma3"))
     assert st.enabled is True and st.installed is False and st.ready is False

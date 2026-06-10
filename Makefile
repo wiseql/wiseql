@@ -3,12 +3,13 @@
 # corrupted by sync conflicts. ~/.venvs/wiseql is local-only and safe.
 export UV_PROJECT_ENVIRONMENT := $(HOME)/.venvs/wiseql
 
-.PHONY: run run-ai test sync validate plan clean
+.PHONY: run test sync validate plan clean
 
-run:        ## open the TUI
-	uv run wiseql
-
-run-ai:     ## open the TUI with the optional AI add-on ([ai] extra)
+# Dev launcher includes the optional AI client so the app behaves like a real
+# `wiseql[ai]` install: AI is controlled purely by config (`wiseql ai setup` /
+# `ai disable`), never by which command you run. The shipped package stays
+# AI-free — the client is only in the [ai] extra, and `make test` runs without it.
+run:        ## open the TUI (AI available; enable/disable via `wiseql ai`)
 	uv run --extra ai wiseql
 
 test:       ## run the test suite

@@ -328,7 +328,8 @@ async def test_f4_ai_extra_missing_shows_install_hint(tmp_path: Path, monkeypatc
         for _ in range(5):
             await pilot.pause()
         assert isinstance(app.screen, AIReviewScreen)
-        assert "run-ai" in app.screen.buffer  # actionable, not "No module named 'ollama'"
+        # actionable install hint, not a raw "No module named 'ollama'"
+        assert "wiseql[ai]" in app.screen.buffer and "isn't installed" in app.screen.buffer
 
 
 @pytest.mark.asyncio
