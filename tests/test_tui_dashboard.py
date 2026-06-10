@@ -258,6 +258,25 @@ async def test_recipes_enter_focuses_detail_esc_returns_to_list(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_f1_help_closes_on_escape_without_leaving_dashboard(tmp_path: Path) -> None:
+    from wiseql.tui.app import HelpScreen
+
+    proj = _project(tmp_path)
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.push_screen(ProjectDashboardScreen(proj, app.config_path))
+        await pilot.pause()
+        await pilot.press("f1")
+        await pilot.pause()
+        assert isinstance(app.screen, HelpScreen)
+        await pilot.press("escape")
+        await pilot.pause()
+        # Esc closes Help and stays on the dashboard — it must NOT leak to the
+        # dashboard's own Esc (which would go back to the picker).
+        assert isinstance(app.screen, ProjectDashboardScreen)
+
+
+@pytest.mark.asyncio
 async def test_tab_switching(tmp_path: Path) -> None:
     proj = _project(tmp_path)
     app = _app(tmp_path)

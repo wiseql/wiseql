@@ -43,7 +43,7 @@ A terminal app that runs SQL [i]recipes[/i] — complex database reads broken
 into a DAG of small steps — with live run views, per-step reports, and
 assertions that catch data issues automatically.
 
-[dim]Docs: https://wiseql.dev   ·   Press any key to close[/dim]
+[dim]Docs: https://wiseql.dev   ·   Esc to close[/dim]
 """
 
 
@@ -61,7 +61,11 @@ class HelpScreen(ModalScreen[None]):
     def compose(self):
         yield Static(HELP_TEXT)
 
-    def on_key(self) -> None:
+    def on_key(self, event) -> None:
+        # Esc (like every other window) — or any key — closes Help. Stop the
+        # event so it can't leak to the screen underneath (else Esc would also
+        # trigger that screen's own Esc action).
+        event.stop()
         self.dismiss()
 
 
