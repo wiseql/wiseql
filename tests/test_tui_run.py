@@ -40,9 +40,10 @@ def _orphan_steps() -> list[StepRun]:
 
 
 def _fake_run(steps, *, ok, capture=None):
-    def _run(loaded, config, *, params=None, environ=None, on_step=None, runs_dir=None):
+    def _run(loaded, config, *, params=None, environ=None, on_step=None, runs_dir=None, resume_from=None):
         if capture is not None:
             capture["params"] = params
+            capture["resume_from"] = resume_from
         if on_step:
             for s in steps:
                 on_step(s.name, None)

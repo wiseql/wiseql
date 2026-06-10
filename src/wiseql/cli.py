@@ -182,6 +182,10 @@ def run(
     max_rows: int = typer.Option(1000, help="Cap on rows fetched (single-step mode)."),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="No output; just exit code + report (cron)."),
     no_report: bool = typer.Option(False, "--no-report", help="Don't persist a run report."),
+    resume: str = typer.Option(
+        None, "--resume",
+        help="Resume a prior run by id, or 'last' for the most recent resumable run.",
+    ),
 ) -> None:
     """Run a recipe end-to-end through DuckDB (or one step with --step)."""
     from wiseql.recipes import load_recipe
@@ -197,16 +201,53 @@ def run(
     params = _parse_params(param)
     config = _load_config().config
     if step is not None:
+        if resume is not None:
+            console.print("[bold red]--resume cannot be combined with --step.[/]")
+            raise typer.Exit(code=2)
         _run_single_step(loaded, config, step, params, max_rows)
-    else:
-        # Reports go to the project that CONTAINS the recipe (cwd-independent).
-        runs_dir = None
-        if not no_report:
-            from wiseql.project import find_project_root
+        return
 
-            root = find_project_root(recipe.resolve().parent)
-            runs_dir = (root / "runs") if root is not None else None
-        _run_full_recipe(loaded, config, params, quiet=quiet, runs_dir=runs_dir)
+    # Reports go to the project that CONTAINS the recipe (cwd-independent).
+    runs_dir = None
+    if not no_report or resume is not None:
+        from wiseql.project import find_project_root
+
+        root = find_project_root(recipe.resolve().parent)
+        runs_dir = (root / "runs") if root is not None else None
+
+    if resume is not None:
+        resume_dir = _resolve_resume_dir(runs_dir, resume, loaded.recipe.recipe.name)
+        # No params on the CLI → inherit the original run's params (must match anyway).
+        if not params:
+            from wiseql.report import read_manifest
+
+            params = (read_manifest(resume_dir) or {}).get("params") or {}
+        _run_full_recipe(loaded, config, params, quiet=quiet, runs_dir=runs_dir, resume_from=resume_dir)
+        return
+
+    _run_full_recipe(loaded, config, params, quiet=quiet, runs_dir=runs_dir)
+
+
+def _resolve_resume_dir(runs_dir, resume: str, recipe_name: str) -> Path:
+    """Resolve --resume (a run id or 'last') to a run dir, or exit with a clear error."""
+    if runs_dir is None:
+        console.print("[bold red]--resume needs a project[/] — the recipe isn't inside one (no runs/).")
+        raise typer.Exit(code=1)
+
+    if resume == "last":
+        from wiseql.report import list_resumable_runs
+
+        candidates = list_resumable_runs(runs_dir, recipe_name)
+        if not candidates:
+            console.print(f"[bold red]no resumable run[/] for [b]{recipe_name}[/] in {runs_dir}.")
+            raise typer.Exit(code=1)
+        return candidates[0].path
+
+    resume_dir = Path(runs_dir) / resume
+    if not resume_dir.is_dir():
+        console.print(f"[bold red]no such run:[/] {resume} (in {runs_dir})")
+        raise typer.Exit(code=1)
+    return resume_dir
 
 
 def _run_single_step(loaded, config, step, params, max_rows) -> None:
@@ -238,10 +279,10 @@ def _run_single_step(loaded, config, step, params, max_rows) -> None:
     )
 
 
-def _run_full_recipe(loaded, config, params, *, quiet=False, runs_dir=None) -> None:
+def _run_full_recipe(loaded, config, params, *, quiet=False, runs_dir=None, resume_from=None) -> None:
     from wiseql.engine import run_recipe
 
-    result = run_recipe(loaded, config, params=params, runs_dir=runs_dir)
+    result = run_recipe(loaded, config, params=params, runs_dir=runs_dir, resume_from=resume_from)
     if result.error:
         if not quiet:
             console.print(f"[bold red]cannot run:[/] {result.error}")
@@ -252,7 +293,12 @@ def _run_full_recipe(loaded, config, params, *, quiet=False, runs_dir=None) -> N
 
         for s in result.steps:
             where = s.source or "duckdb"
-            if s.ok:
+            if s.restored:
+                console.print(
+                    f"[cyan]↻[/] [b]{s.name}[/] [dim]({s.kind} · {where})[/] — "
+                    f"restored from checkpoint, {s.row_count} row(s)"
+                )
+            elif s.ok:
                 console.print(
                     f"[green]✓[/] [b]{s.name}[/] [dim]({s.kind} · {where})[/] — "
                     f"{s.row_count} row(s) in {s.elapsed_ms} ms"

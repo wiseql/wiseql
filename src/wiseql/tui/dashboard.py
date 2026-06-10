@@ -13,6 +13,7 @@ Ctrl+T syncs the schema, Ctrl+N a new project. Esc returns to the project picker
 from __future__ import annotations
 
 import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 
 from rich.markup import escape
@@ -34,7 +35,56 @@ from textual.widgets import (
 )
 
 from wiseql.recipes import load_recipe
-from wiseql.report import list_reports, load_report, report_info
+from wiseql.report import (
+    REPORT_NAME,
+    checkpoint_steps,
+    list_reports,
+    load_report,
+    read_manifest,
+    report_info,
+)
+
+
+@dataclass
+class _RunRow:
+    """One row in the Runs tab: a finished run (report) or an interrupted one (manifest)."""
+
+    run_dir: Path
+    report_path: Path | None  # None → interrupted (no report written)
+    recipe: str
+    started_at: str
+    result_markup: str
+    steps_text: str
+    resumable: bool
+
+
+def _collect_runs(runs_dir: Path) -> list[_RunRow]:
+    """All run dirs newest first: finished (report.json) and interrupted (run.json only)."""
+    runs_dir = Path(runs_dir)
+    if not runs_dir.is_dir():
+        return []
+    rows: list[_RunRow] = []
+    for d in sorted((p for p in runs_dir.iterdir() if p.is_dir()), reverse=True):
+        report = d / REPORT_NAME
+        manifest = read_manifest(d)
+        done = checkpoint_steps(d)
+        status = (manifest or {}).get("status")
+        total = len((manifest or {}).get("step_sql") or {})
+        # Resumable only if a step still remains to run — a fully-checkpointed
+        # failed run (e.g. terminal report_samples) has nothing to resume.
+        has_work = bool(done) and total > 0 and len(done) < total
+        if report.is_file():
+            info = report_info(report)
+            result = "[green]✓ ok[/]" if info.ok else "[bold red]✗ failed[/]"
+            resumable = (not info.ok) and has_work and status in ("failed", "running")
+            rows.append(_RunRow(d, report, info.recipe, info.started_at, result, str(info.step_count), resumable))
+        elif manifest is not None:
+            rows.append(_RunRow(
+                d, None, manifest.get("recipe", "?"), manifest.get("started_at", "?"),
+                "[yellow]⚠ interrupted[/]", f"{len(done)} ✓",
+                has_work and status in ("running", "failed"),
+            ))
+    return rows
 
 
 class ProjectDashboardScreen(Screen[None]):
@@ -49,6 +99,7 @@ class ProjectDashboardScreen(Screen[None]):
         Binding("left", "prev_tab", "Prev tab", priority=True, show=False),
         Binding("right", "next_tab", "Next tab", priority=True, show=False),
         Binding("f2", "run", "Run"),
+        Binding("ctrl+r", "resume", "Resume"),
         Binding("f3", "connections", "Connections"),
         Binding("ctrl+t", "sync", "Sync schema"),
         Binding("ctrl+n", "new_project", "New project"),
@@ -80,7 +131,7 @@ class ProjectDashboardScreen(Screen[None]):
         self._config_path = config_path
         self._recipe_paths: list[Path] = []
         self._current = None  # LoadResult of the selected recipe
-        self._run_paths: list[Path] = []
+        self._run_rows: list[_RunRow] = []
         # Rendered text mirrors, exposed for tests (the panes hold Syntax objects).
         self.overview_text = ""
         self.recipe_toml_text = ""
@@ -121,6 +172,7 @@ class ProjectDashboardScreen(Screen[None]):
         # Discoverable hints for the Recipes-tab focus flow.
         self.query_one("#recipe-list").border_subtitle = "enter → scroll"
         self.query_one("#recipe-detail").border_subtitle = "esc → list"
+        self.query_one("#runs-table").border_subtitle = "enter → detail · ctrl+r → resume"
         self._render_overview()
         self._load_recipes()
         self._load_runs()
@@ -266,18 +318,24 @@ class ProjectDashboardScreen(Screen[None]):
         table.clear(columns=True)
         for col in ("when", "recipe", "result", "steps"):
             table.add_column(col, key=col)
-        self._run_paths = list_reports(self._project / "runs")
-        for i, path in enumerate(self._run_paths):
-            info = report_info(path)
-            result = "[green]✓ ok[/]" if info.ok else "[bold red]✗ failed[/]"
-            table.add_row(info.started_at, info.recipe, result, str(info.step_count), key=str(i))
+        # One row per run dir, newest first. A finished run has report.json; an
+        # interrupted run (killed before the report) has only its run.json
+        # manifest + checkpoints — still listed, so it can be resumed.
+        self._run_rows = _collect_runs(self._project / "runs")
+        for i, row in enumerate(self._run_rows):
+            table.add_row(row.started_at, row.recipe, row.result_markup, row.steps_text, key=str(i))
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         idx = int(event.row_key.value)
-        if 0 <= idx < len(self._run_paths):
-            from wiseql.tui.reports import ReportDetailScreen
+        if not (0 <= idx < len(self._run_rows)):
+            return
+        row = self._run_rows[idx]
+        if row.report_path is None:
+            self.notify("interrupted run — press Ctrl+R to resume it", severity="information")
+            return
+        from wiseql.tui.reports import ReportDetailScreen
 
-            self.app.push_screen(ReportDetailScreen(load_report(self._run_paths[idx])))
+        self.app.push_screen(ReportDetailScreen(load_report(row.report_path)))
 
     # --- actions ------------------------------------------------------------
 
@@ -324,6 +382,39 @@ class ProjectDashboardScreen(Screen[None]):
                 runs_dir=self._project / "runs",
             )
         )
+
+    def action_resume(self) -> None:
+        """Resume the selected run from its checkpoints (Runs tab)."""
+        table = self.query_one("#runs-table", DataTable)
+        idx = table.cursor_row
+        if not (0 <= idx < len(self._run_rows)):
+            self.notify("select a run first (Runs tab)", severity="warning")
+            return
+        row = self._run_rows[idx]
+        if not row.resumable:
+            self.notify("this run has nothing to resume", severity="warning")
+            return
+        loaded = self._find_recipe_by_name(row.recipe)
+        if loaded is None or loaded.recipe is None or not loaded.ok:
+            self.notify(f"recipe '{row.recipe}' not found or invalid in this project", severity="error")
+            return
+        from wiseql.tui.run import RunScreen
+
+        params = (read_manifest(row.run_dir) or {}).get("params") or {}
+        self.app.push_screen(
+            RunScreen(
+                loaded, self._config(), params, row.recipe,
+                runs_dir=self._project / "runs", resume_from=row.run_dir,
+            )
+        )
+
+    def _find_recipe_by_name(self, name: str):
+        """Find the LoadResult whose [recipe].name matches (manifests store the name)."""
+        for path in self._recipe_paths:
+            loaded = load_recipe(path)
+            if loaded.recipe is not None and loaded.recipe.recipe.name == name:
+                return loaded
+        return None
 
     def action_connections(self) -> None:
         from wiseql.tui.connections import ConnectionsScreen
