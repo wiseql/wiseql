@@ -27,8 +27,8 @@ dependencies = [
 
 [project.optional-dependencies]
 # AI is an OPTIONAL add-on. The base app must never require these.
-# Will hold the Ollama client in Sprint 6: pip install wiseql[ai]
-ai = []
+# Enable with: pip install 'wiseql[ai]'  (or uv tool install 'wiseql[ai]')
+ai = ["ollama>=0.3"]
 
 [project.urls]
 Homepage = "https://wiseql.dev"

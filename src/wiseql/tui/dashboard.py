@@ -106,6 +106,7 @@ class ProjectDashboardScreen(Screen[None]):
         Binding("f3", "connections", "Connections"),
         Binding("ctrl+t", "sync", "Sync schema"),
         Binding("ctrl+n", "new_project", "New project"),
+        Binding("f9", "settings", "Settings"),
         Binding("f1", "help", "Help"),
     ]
 
@@ -471,6 +472,11 @@ class ProjectDashboardScreen(Screen[None]):
 
     def action_new_project(self) -> None:
         self.app.action_new_project()
+
+    def action_settings(self) -> None:
+        from wiseql.tui.settings import SettingsScreen
+
+        self.app.push_screen(SettingsScreen())
 
     def action_help(self) -> None:
         from wiseql.tui.app import HelpScreen
