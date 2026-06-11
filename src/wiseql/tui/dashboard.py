@@ -100,7 +100,6 @@ class ProjectDashboardScreen(Screen[None]):
         Binding("left", "prev_tab", "Prev tab", priority=True, show=False),
         Binding("right", "next_tab", "Next tab", priority=True, show=False),
         Binding("f2", "run", "Run"),
-        Binding("f4", "ai_review", "AI review"),
         Binding("ctrl+r", "resume", "Resume"),
         Binding("ctrl+d", "diff", "Diff vs prev"),
         Binding("ctrl+e", "explore", "Explore data"),
@@ -340,7 +339,9 @@ class ProjectDashboardScreen(Screen[None]):
             return
         from wiseql.tui.reports import ReportDetailScreen
 
-        self.app.push_screen(ReportDetailScreen(load_report(row.report_path)))
+        # Pass the project so the report screen's F4 AI-explain can ground on the
+        # recipe + context.
+        self.app.push_screen(ReportDetailScreen(load_report(row.report_path), project=self._project))
 
     # --- actions ------------------------------------------------------------
 
@@ -387,33 +388,6 @@ class ProjectDashboardScreen(Screen[None]):
                 runs_dir=self._project / "runs",
             )
         )
-
-    def action_ai_review(self) -> None:
-        """AI semantic review of the selected recipe (Recipes tab)."""
-        if self._current is None or self._current.recipe is None or not self._current.ok:
-            self.notify("select a valid recipe first (Recipes tab)", severity="warning")
-            return
-        self.notify("Running AI review …")
-        self._ai_review_worker(self.recipe_toml_text, self._current.resolved_sql)
-
-    @work(thread=True)
-    def _ai_review_worker(self, raw_toml: str, resolved_sql: dict) -> None:
-        from wiseql.ai import get_provider
-        from wiseql.context import read_context
-        from wiseql.recipes import recipe_review_text
-
-        text = recipe_review_text(raw_toml, resolved_sql)
-        # One call: NullProvider answers instantly; OllamaProvider reports why if down.
-        result = get_provider().validate_recipe(text, read_context(self._project))
-        self.app.call_from_thread(self._show_ai_review, result)
-
-    def _show_ai_review(self, result) -> None:
-        if result.available:
-            from wiseql.tui.aireview import AIReviewScreen
-
-            self.app.push_screen(AIReviewScreen("AI recipe review", result.text))
-        else:
-            self.notify(result.text or "AI is off — enable in Settings (F9)", severity="information")
 
     def action_resume(self) -> None:
         """Resume the selected run from its checkpoints (Runs tab)."""

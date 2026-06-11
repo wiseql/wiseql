@@ -41,8 +41,15 @@ class StepDetailScreen(Screen[None]):
     BINDINGS = [Binding("escape", "app.pop_screen", "Back")]
 
     DEFAULT_CSS = """
+    StepDetailScreen #detail-scroll {
+        border: round $primary 50%;
+        border-title-color: $accent;
+        height: 1fr;
+        margin: 1 2;
+        padding: 0 1;
+    }
     StepDetailScreen #detail-grid { height: auto; max-height: 18; }
-    StepDetailScreen Static { padding: 0 2; }
+    StepDetailScreen Static { padding: 0 1; }
     """
 
     def __init__(self, step: StepRun) -> None:
@@ -57,6 +64,7 @@ class StepDetailScreen(Screen[None]):
 
     def on_mount(self) -> None:
         s = self._step
+        self.query_one("#detail-scroll").border_title = f"step · {s.name}"
         src = s.source or "duckdb"
         if s.ok:
             head = f"[b]{s.name}[/] [dim]({s.kind} · {src})[/] — [green]{s.row_count} row(s)[/] in {s.elapsed_ms} ms"
@@ -95,11 +103,25 @@ class RunScreen(Screen[None]):
     """Live DAG run: a row per step, lighting up as the executor progresses."""
 
     TITLE = "WiseQL — Run"
-    BINDINGS = [Binding("escape", "app.pop_screen", "Back")]
+    BINDINGS = [
+        Binding("escape", "app.pop_screen", "Back"),
+        Binding("f4", "ai_explain", "AI explain"),
+    ]
 
     DEFAULT_CSS = """
-    RunScreen #run-status { padding: 0 1; height: auto; }
-    RunScreen #run-table { height: 1fr; }
+    RunScreen #run-status {
+        border: round $primary 50%;
+        border-title-color: $accent;
+        height: auto;
+        padding: 0 1;
+        margin: 1 2 0 2;
+    }
+    RunScreen #run-table {
+        border: round $primary 50%;
+        border-title-color: $accent;
+        height: 1fr;
+        margin: 0 2 1 2;
+    }
     """
 
     def __init__(
@@ -124,7 +146,10 @@ class RunScreen(Screen[None]):
         yield Footer()
 
     def on_mount(self) -> None:
+        self.query_one("#run-status", Static).border_title = "run"
         table = self.query_one("#run-table", DataTable)
+        table.border_title = "steps"
+        table.border_subtitle = "Enter = step detail · F4 = AI explain · Esc = back"
         for col in _RUN_COLUMNS:
             table.add_column(col, key=col)
         plan = build_plan(self._loaded.recipe)
@@ -168,10 +193,7 @@ class RunScreen(Screen[None]):
         self._result = result
         verdict = "[green]✓ ok[/]" if result.ok else "[bold red]✗ failed[/]"
         extra = f" — {escape(result.error)}" if result.error else ""
-        self._set_status(
-            f"[b]{self._recipe_name}[/] · run {verdict} in {result.elapsed_ms} ms{extra}"
-            "  [dim](Enter = step detail · Esc = back)[/]"
-        )
+        self._set_status(f"[b]{self._recipe_name}[/] · run {verdict} in {result.elapsed_ms} ms{extra}")
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         # Enter on a step row → its detail (DataTable consumes Enter as RowSelected).
@@ -180,6 +202,21 @@ class RunScreen(Screen[None]):
         step = self._result.step(event.row_key.value)
         if step is not None:
             self.app.push_screen(StepDetailScreen(step))
+
+    def action_ai_explain(self) -> None:
+        if self._result is None:
+            self.notify("wait for the run to finish", severity="warning")
+            return
+        if not self._result.report_path:
+            self.notify("AI review needs a run report — run inside a project", severity="warning")
+            return
+        from pathlib import Path
+
+        from wiseql.report import load_report
+        from wiseql.tui.aireview import push_run_review
+
+        project = Path(self._runs_dir).parent if self._runs_dir else None
+        push_run_review(self.app, load_report(self._result.report_path), project)
 
 
 def _cells(row) -> list[str]:

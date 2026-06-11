@@ -2,20 +2,11 @@
 provider wiring (S6.1) exercised through an injected fake client — no live
 Ollama and no `ollama` package required."""
 
-import importlib.util
-
-import pytest
+import sys
 
 from wiseql.ai import AIProvider, AIResult, NullProvider, describe_status, get_provider
 from wiseql.ai.ollama import OllamaProvider
 from wiseql.ai.settings import AISettings
-
-# A few tests assert the "not installed" path, which is only authentic in a venv
-# without the [ai] extra (the base `make test` env). Skip them if `ollama` is present.
-_no_ollama = pytest.mark.skipif(
-    importlib.util.find_spec("ollama") is not None,
-    reason="assumes the base venv without the [ai] extra",
-)
 
 
 class FakeClient:
@@ -31,7 +22,9 @@ class FakeClient:
             raise RuntimeError("connection refused")
         return {"models": [{"model": m} for m in self._models]}
 
-    def generate(self, model, prompt):
+    def generate(self, model, prompt, stream=False):
+        if stream:
+            return iter([{"response": "step 3 "}, {"response": "is wrong"}])
         return {"response": self._response}
 
 
@@ -100,12 +93,21 @@ def test_generate_returns_text() -> None:
 
 def test_generate_degrades_on_error() -> None:
     class Boom(FakeClient):
-        def generate(self, model, prompt):
+        def generate(self, model, prompt, stream=False):
             raise RuntimeError("model crashed")
 
     p = OllamaProvider("gemma3", "http://x", client=Boom())
     r = p.explain_failure("{}", "", "")
     assert r.available is False and "unavailable" in r.text
+
+
+def test_stream_yields_chunks() -> None:
+    p = OllamaProvider("gemma3", "http://x", client=FakeClient())
+    assert list(p.stream("prompt")) == ["step 3 ", "is wrong"]
+
+
+def test_null_provider_stream_is_empty() -> None:
+    assert list(NullProvider().stream("prompt")) == []
 
 
 # --- describe_status (shared by CLI + TUI) ----------------------------------
@@ -117,8 +119,9 @@ def test_describe_status_off() -> None:
     assert "off" in st.detail.lower()
 
 
-@_no_ollama
-def test_describe_status_enabled_but_not_installed() -> None:
-    # base test venv has no `ollama` package → authentic not-installed path
+def test_describe_status_enabled_but_not_installed(monkeypatch) -> None:
+    # Simulate the [ai] extra being absent regardless of the venv's real state,
+    # so this is deterministic whether or not `make run` added ollama.
+    monkeypatch.setitem(sys.modules, "ollama", None)  # `import ollama` → ImportError
     st = describe_status(AISettings(enabled=True, model="gemma3"))
     assert st.enabled is True and st.installed is False and st.ready is False

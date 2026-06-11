@@ -12,40 +12,15 @@ missing, package absent): AI only ever *adds* information.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 from wiseql.ai import AIProvider, AIResult
+from wiseql.ai.prompts import build_explain_prompt, build_narrative_prompt, build_validate_prompt
 
 
-def _validate_prompt(recipe_text: str, context: str) -> str:
-    return (
-        "You are reviewing a WiseQL SQL recipe for *semantic* problems that a "
-        "structural validator cannot catch — e.g. a step referencing a column an "
-        "upstream step does not output, or a join key that does not exist.\n"
-        "Report concrete issues as a short bullet list, or reply exactly 'OK' if "
-        "you find none. Do not restate the recipe.\n\n"
-        f"--- schema/context ---\n{context or '(none provided)'}\n\n"
-        f"--- recipe ---\n{recipe_text}\n"
-    )
-
-
-def _explain_prompt(report_json: str, recipe_text: str, context: str) -> str:
-    return (
-        "A WiseQL run failed. Using the run report, the recipe, and the schema "
-        "context, explain in 2-4 sentences the most likely cause and name the step "
-        "to inspect first. Be concrete; do not dump the inputs back.\n\n"
-        f"--- schema/context ---\n{context or '(none provided)'}\n\n"
-        f"--- recipe ---\n{recipe_text}\n\n"
-        f"--- run report (JSON) ---\n{report_json}\n"
-    )
-
-
-def _narrative_prompt(report_json: str, context: str) -> str:
-    return (
-        "Summarise this WiseQL run for a teammate who did not see it run: what each "
-        "step did, row counts, and any assertion that failed and why it matters. "
-        "A few short paragraphs, plain language.\n\n"
-        f"--- schema/context ---\n{context or '(none provided)'}\n\n"
-        f"--- run report (JSON) ---\n{report_json}\n"
-    )
+def _chunk_text(part) -> str:
+    """Pull the text out of one streamed/whole Ollama response (dict or object)."""
+    return (part.get("response") if isinstance(part, dict) else getattr(part, "response", "")) or ""
 
 
 class OllamaProvider(AIProvider):
@@ -93,17 +68,27 @@ class OllamaProvider(AIProvider):
             resp = self._get_client().generate(model=self.model, prompt=prompt)
         except Exception as exc:  # noqa: BLE001 — degrade, never block
             return AIResult(available=False, text=f"AI unavailable: {str(exc).strip()}")
-        text = (resp.get("response") if isinstance(resp, dict) else getattr(resp, "response", "")) or ""
-        return AIResult(available=True, text=text.strip())
+        return AIResult(available=True, text=_chunk_text(resp).strip())
+
+    def stream(self, prompt: str) -> Iterator[str]:
+        """Yield response chunks as Ollama generates them (TUI streaming).
+
+        May raise (unreachable / missing model) — the caller catches and shows
+        the error. NullProvider yields nothing instead.
+        """
+        for part in self._get_client().generate(model=self.model, prompt=prompt, stream=True):
+            chunk = _chunk_text(part)
+            if chunk:
+                yield chunk
 
     def validate_recipe(self, recipe_text: str, context: str) -> AIResult:
-        return self._generate(_validate_prompt(recipe_text, context))
+        return self._generate(build_validate_prompt(recipe_text, context))
 
     def explain_failure(self, report_json: str, recipe_text: str, context: str) -> AIResult:
-        return self._generate(_explain_prompt(report_json, recipe_text, context))
+        return self._generate(build_explain_prompt(report_json, recipe_text, context))
 
     def narrative_report(self, report_json: str, context: str) -> AIResult:
-        return self._generate(_narrative_prompt(report_json, context))
+        return self._generate(build_narrative_prompt(report_json, context))
 
 
 def _model_names(listing) -> list[str]:

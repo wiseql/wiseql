@@ -12,6 +12,7 @@ require an AI backend. AI only ever *adds* information.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 
@@ -49,6 +50,11 @@ class AIProvider(ABC):
     def narrative_report(self, report_json: str, context: str) -> AIResult:
         """Generate a human-readable narrative of a run."""
 
+    @abstractmethod
+    def stream(self, prompt: str) -> Iterator[str]:
+        """Yield response chunks for a raw prompt (TUI streaming). Empty when
+        the backend is unavailable — never raises for being off."""
+
 
 class NullProvider(AIProvider):
     """Default provider when no AI add-on is installed/enabled.
@@ -71,6 +77,9 @@ class NullProvider(AIProvider):
 
     def narrative_report(self, report_json: str, context: str) -> AIResult:
         return AIResult(available=False)
+
+    def stream(self, prompt: str) -> Iterator[str]:
+        return iter(())  # nothing to stream when AI is off
 
 
 @dataclass(frozen=True)
