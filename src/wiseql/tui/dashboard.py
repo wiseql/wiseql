@@ -100,7 +100,6 @@ class ProjectDashboardScreen(Screen[None]):
         Binding("left", "prev_tab", "Prev tab", priority=True, show=False),
         Binding("right", "next_tab", "Next tab", priority=True, show=False),
         Binding("f2", "run", "Run"),
-        Binding("f4", "ai_review", "AI review"),
         Binding("ctrl+r", "resume", "Resume"),
         Binding("ctrl+d", "diff", "Diff vs prev"),
         Binding("ctrl+e", "explore", "Explore data"),
@@ -340,7 +339,9 @@ class ProjectDashboardScreen(Screen[None]):
             return
         from wiseql.tui.reports import ReportDetailScreen
 
-        self.app.push_screen(ReportDetailScreen(load_report(row.report_path)))
+        # Pass the project so the report screen's F4 AI-explain can ground on the
+        # recipe + context.
+        self.app.push_screen(ReportDetailScreen(load_report(row.report_path), project=self._project))
 
     # --- actions ------------------------------------------------------------
 
@@ -387,22 +388,6 @@ class ProjectDashboardScreen(Screen[None]):
                 runs_dir=self._project / "runs",
             )
         )
-
-    def action_ai_review(self) -> None:
-        """AI semantic review of the selected recipe — opens the (streaming) view at once."""
-        if self._current is None or self._current.recipe is None or not self._current.ok:
-            self.notify("select a valid recipe first (Recipes tab)", severity="warning")
-            return
-        from wiseql.ai import get_provider
-        from wiseql.ai.prompts import build_validate_prompt
-        from wiseql.context import read_context
-        from wiseql.recipes import recipe_review_text
-        from wiseql.tui.aireview import AIReviewScreen
-
-        text = recipe_review_text(self.recipe_toml_text, self._current.resolved_sql)
-        prompt = build_validate_prompt(text, read_context(self._project))
-        # Open the view immediately; it streams the result on its own worker.
-        self.app.push_screen(AIReviewScreen("AI recipe review", get_provider(), prompt))
 
     def action_resume(self) -> None:
         """Resume the selected run from its checkpoints (Runs tab)."""

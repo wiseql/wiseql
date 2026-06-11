@@ -12,6 +12,9 @@ shown as the off hint. Model text is escaped — never interpreted as markup.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from rich.markup import escape
 
 from textual import work
@@ -20,6 +23,35 @@ from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Footer, Header, Static
+
+
+def _resolve_recipe_text(project_root, recipe_name: str | None) -> str:
+    """The current recipe's TOML + resolved SQL, found by name in the project."""
+    if project_root is None or not recipe_name:
+        return "(recipe not available)"
+    from wiseql.recipes import load_recipe, recipe_review_text
+
+    rdir = Path(project_root) / "recipes"
+    if rdir.is_dir():
+        for path in sorted(rdir.glob("*.toml")):
+            loaded = load_recipe(path)
+            if loaded.recipe is not None and loaded.recipe.recipe.name == recipe_name:
+                return recipe_review_text(path.read_text(encoding="utf-8"), loaded.resolved_sql)
+    return "(recipe not available)"
+
+
+def push_run_review(app, report: dict, project_root) -> None:
+    """Open a streaming AI review of a finished run on the AI screen."""
+    from wiseql.ai import get_provider
+    from wiseql.ai.prompts import build_run_review_prompt
+    from wiseql.context import read_context
+    from wiseql.report import trim_report_for_ai
+
+    recipe_name = report.get("recipe")
+    recipe_text = _resolve_recipe_text(project_root, recipe_name)
+    report_json = json.dumps(trim_report_for_ai(report))  # trimmed: no bulky output rows
+    prompt = build_run_review_prompt(report_json, recipe_text, read_context(project_root))
+    app.push_screen(AIReviewScreen(f"AI run review — {recipe_name or 'run'}", get_provider(), prompt))
 
 
 class AIReviewScreen(Screen[None]):

@@ -253,6 +253,53 @@ def report_info(path: Path) -> ReportInfo:
     )
 
 
+# Offending-row samples kept per assertion when feeding a report to the AI.
+AI_SAMPLE_ROWS = 3
+
+
+def trim_report_for_ai(report: dict) -> dict:
+    """A compact copy of a report for an AI prompt.
+
+    Drops the bulky per-step output ``sample`` rows (normal output is noise for
+    an explanation) but keeps the diagnostic fields — step status, row counts,
+    errors, column lists, and a *few* offending assertion rows (those are what
+    explain a failure). A local model's context window is small; this keeps the
+    prompt focused and from overflowing.
+    """
+    steps = []
+    for s in report.get("steps", []):
+        steps.append({
+            "name": s.get("name"),
+            "kind": s.get("kind"),
+            "source": s.get("source"),
+            "ok": s.get("ok"),
+            "restored": s.get("restored", False),
+            "row_count": s.get("row_count"),
+            "elapsed_ms": s.get("elapsed_ms"),
+            "error": s.get("error", ""),
+            "on_fail": s.get("on_fail", "stop"),
+            "columns": s.get("columns", []),
+            "assertions": [
+                {
+                    "check": a.get("check"),
+                    "passed": a.get("passed"),
+                    "detail": a.get("detail", ""),
+                    "sample_columns": a.get("sample_columns", []),
+                    "samples": [list(r) for r in a.get("samples", [])][:AI_SAMPLE_ROWS],
+                }
+                for a in s.get("assertions", [])
+            ],
+        })
+    return {
+        "recipe": report.get("recipe"),
+        "ok": report.get("ok"),
+        "params": report.get("params", {}),
+        "error": report.get("error", ""),
+        "terminals": report.get("terminals", []),
+        "steps": steps,
+    }
+
+
 def report_to_runresult(report: dict) -> RunResult:
     """Rebuild a RunResult from a loaded report, for the TUI viewer to render."""
     steps = [

@@ -16,6 +16,7 @@ from wiseql.report import (
     load_report,
     report_info,
     report_to_runresult,
+    to_report,
     write_report,
 )
 
@@ -75,6 +76,20 @@ def test_report_to_runresult_rebuilds_for_viewer(tmp_path: Path) -> None:
     assert rr.step("orders").row_count == 2
     assert rr.step("orders").assert_failed
     assert rr.step("orders").assertions[0].samples[0][2] is None
+
+
+def test_trim_report_for_ai_drops_samples_keeps_diagnostics() -> None:
+    from wiseql.report import trim_report_for_ai
+
+    report = to_report(_result(), "orphan-returns", {"run_date": "2026-01-01"}, datetime(2026, 6, 8, 12, 0, 0))
+    trimmed = trim_report_for_ai(report)
+    step = trimmed["steps"][0]
+    assert "sample" not in step  # bulky output rows dropped
+    assert step["columns"] and step["row_count"] == 2  # diagnostics kept
+    a = step["assertions"][0]
+    assert a["check"] and a["passed"] is False and a["detail"]  # assertion kept
+    assert len(a["samples"]) <= 3  # offending rows capped
+    assert trimmed["recipe"] == "orphan-returns" and trimmed["ok"] is False
 
 
 def test_run_recipe_writes_report_even_when_run_fails(tmp_path: Path) -> None:

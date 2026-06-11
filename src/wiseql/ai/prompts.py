@@ -21,6 +21,29 @@ def build_validate_prompt(recipe_text: str, context: str) -> str:
     )
 
 
+def build_run_review_prompt(report_json: str, recipe_text: str, context: str) -> str:
+    """Adaptive review of a finished run — works for both passing and failed runs.
+
+    Asks the model to say what the run did, what looks correct, what looks wrong
+    (and the likely cause), and where to look first. The recipe is the *current*
+    file, which may differ from what the run executed — labelled as such.
+    """
+    return (
+        "You are reviewing a finished WiseQL run — a recipe executed as a DAG of "
+        "SQL steps. Using the run report, the recipe, and the schema context:\n"
+        "1. In one line, say what the run did overall and whether it succeeded.\n"
+        "2. Note what looks correct — steps that ran and passed their assertions, "
+        "reasonable row counts.\n"
+        "3. Call out what looks wrong or risky — failed steps, failed assertions, "
+        "suspicious row counts (0 rows, large drops) — and the most likely cause.\n"
+        "4. Name the step to inspect first.\n"
+        "Be concrete and concise; do not dump the inputs back.\n\n"
+        f"--- schema/context ---\n{context or '(none provided)'}\n\n"
+        f"--- recipe (as it stands now) ---\n{recipe_text}\n\n"
+        f"--- run report (JSON) ---\n{report_json}\n"
+    )
+
+
 def build_explain_prompt(report_json: str, recipe_text: str, context: str) -> str:
     return (
         "A WiseQL run failed. Using the run report, the recipe, and the schema "
