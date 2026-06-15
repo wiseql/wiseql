@@ -16,15 +16,11 @@ A 400-line SQL query is a black box. WiseQL turns it into a glass box.
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/) (or pipx).
 
 ```bash
-# from GitHub (with the optional AI add-on)
-uv tool install "wiseql[ai] @ git+https://github.com/wiseql/wiseql.git"
+# from PyPI, with the optional AI add-on
+uv tool install "wiseql[ai]"
 
 # …or without AI
-uv tool install "git+https://github.com/wiseql/wiseql.git"
-
-# …or from a local clone
-git clone https://github.com/wiseql/wiseql.git && cd wiseql
-uv tool install '.[ai]'
+uv tool install wiseql
 ```
 
 This puts `wiseql` on your PATH. Check it:
@@ -34,7 +30,19 @@ wiseql version
 wiseql --help
 ```
 
-(`pipx install "wiseql[ai] @ git+https://github.com/wiseql/wiseql.git"` works too.)
+(`pipx install "wiseql[ai]"` works too.)
+
+<details><summary>Install the latest unreleased code (from GitHub) or a local clone</summary>
+
+```bash
+# latest from main
+uv tool install "wiseql[ai] @ git+https://github.com/wiseql/wiseql.git"
+
+# from a local clone (for development)
+git clone https://github.com/wiseql/wiseql.git && cd wiseql
+uv tool install '.[ai]'
+```
+</details>
 
 ## Connect to your database
 

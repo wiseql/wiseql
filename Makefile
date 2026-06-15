@@ -3,7 +3,7 @@
 # corrupted by sync conflicts. ~/.venvs/wiseql is local-only and safe.
 export UV_PROJECT_ENVIRONMENT := $(HOME)/.venvs/wiseql
 
-.PHONY: run test sync validate plan clean
+.PHONY: run test sync validate plan build publish clean
 
 # Dev launcher includes the optional AI client so the app behaves like a real
 # `wiseql[ai]` install: AI is controlled purely by config (`wiseql ai setup` /
@@ -23,6 +23,12 @@ validate:   ## validate all example recipes
 
 plan:       ## show the demo recipe plan
 	uv run wiseql plan examples/orphan-returns.toml
+
+build:      ## clean-build the wheel + sdist into dist/
+	rm -rf dist && uv build
+
+publish: build   ## build then upload to PyPI (needs UV_PUBLISH_TOKEN; see RELEASING.md)
+	uv publish
 
 clean:
 	rm -rf $(HOME)/.venvs/wiseql dist build
