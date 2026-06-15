@@ -15,8 +15,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-# Where projects live when the config doesn't say otherwise.
-DEFAULT_PROJECTS_DIR = "~/.wiseql/projects"
+# Where projects live when the config doesn't say otherwise. A *visible* folder
+# in the user's home (not a hidden dotfolder) so projects are easy to find and
+# edit in a file manager. Override per-machine with [defaults] projects_dir.
+DEFAULT_PROJECTS_DIR = "~/wiseql"
 
 Driver = Literal["oracle"]  # PostgreSQL arrives in a later sprint
 AuthMethod = Literal["keyring", "env", "wallet"]

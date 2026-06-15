@@ -88,6 +88,33 @@ def _collect_runs(runs_dir: Path) -> list[_RunRow]:
     return rows
 
 
+def _open_in_file_manager(path: Path) -> None:
+    """Reveal a folder in the OS file manager (macOS Finder / xdg / Explorer)."""
+    import subprocess
+    import sys
+
+    target = str(path)
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["open", target], check=False)
+        elif sys.platform.startswith("win"):
+            import os
+
+            os.startfile(target)  # type: ignore[attr-defined]  # noqa: S606
+        else:
+            subprocess.run(["xdg-open", target], check=False)
+    except Exception:  # noqa: BLE001 — best-effort; never crash the TUI
+        pass
+
+
+def _recipe_template(name: str, connection: str) -> str:
+    """A minimal valid recipe to start editing from."""
+    return (
+        f'[recipe]\nname = "{name}"\ndescription = ""\n\n'
+        f'[steps.step1]\nsource = "{connection}"\nsql = """\nSELECT 1\n"""\n'
+    )
+
+
 class ProjectDashboardScreen(Screen[None]):
     _TABS = ("overview", "recipes", "runs")
 
@@ -100,6 +127,9 @@ class ProjectDashboardScreen(Screen[None]):
         Binding("left", "prev_tab", "Prev tab", priority=True, show=False),
         Binding("right", "next_tab", "Next tab", priority=True, show=False),
         Binding("f2", "run", "Run"),
+        Binding("f4", "edit_recipe", "Edit recipe"),
+        Binding("f5", "new_recipe", "New recipe"),
+        Binding("ctrl+o", "open_folder", "Open folder"),
         Binding("ctrl+r", "resume", "Resume"),
         Binding("ctrl+d", "diff", "Diff vs prev"),
         Binding("ctrl+e", "explore", "Explore data"),
@@ -135,6 +165,7 @@ class ProjectDashboardScreen(Screen[None]):
         self._config_path = config_path
         self._recipe_paths: list[Path] = []
         self._current = None  # LoadResult of the selected recipe
+        self._current_path: Path | None = None  # its file, for the editor
         self._run_rows: list[_RunRow] = []
         # Rendered text mirrors, exposed for tests (the panes hold Syntax objects).
         self.overview_text = ""
@@ -228,6 +259,8 @@ class ProjectDashboardScreen(Screen[None]):
         lines.append(f"[b]{escape(str(proj.get('name', self._project.name)))}[/b]")
         if proj.get("description"):
             lines.append(f"[i]{escape(str(proj['description']))}[/i]")
+        # The folder on disk — so you can find/copy/edit the files outside the app.
+        lines.append(f"[dim]folder:[/] {escape(str(self._project))}  [dim](Ctrl+O to open)[/]")
         lines.append("")
         for key in ("owner", "tags"):
             if key in proj:
@@ -252,7 +285,7 @@ class ProjectDashboardScreen(Screen[None]):
         present = [f.name for f in (ctx / "tables.md", ctx / "domain.md") if f.exists()]
         lines.append(f"[dim]context:[/] {', '.join(present) if present else '—'}")
         lines.append("")
-        lines.append("[dim]2 Recipes · 3 Runs · F2 run · F3 connections · Ctrl+T sync · Esc projects[/]")
+        lines.append("[dim]2 Recipes (F4 edit · F5 new) · 3 Runs · F2 run · Ctrl+O open folder · F3 connections · Ctrl+T sync[/]")
 
         self.overview_text = "\n".join(lines)
         self.query_one("#overview-body", Static).update(self.overview_text)
@@ -282,6 +315,7 @@ class ProjectDashboardScreen(Screen[None]):
         self.query_one("#recipe-detail").focus()
 
     def _show_recipe(self, path: Path) -> None:
+        self._current_path = path
         self._current = load_recipe(path)
         recipe = self._current.recipe
 
@@ -479,6 +513,50 @@ class ProjectDashboardScreen(Screen[None]):
         from wiseql.tui.settings import SettingsScreen
 
         self.app.push_screen(SettingsScreen())
+
+    # --- editor + folder ----------------------------------------------------
+
+    def action_open_folder(self) -> None:
+        """Reveal the project folder in the OS file manager."""
+        _open_in_file_manager(self._project)
+        self.notify(f"Opening {self._project}")
+
+    def action_edit_recipe(self) -> None:
+        """Open the selected recipe's .toml in the built-in editor."""
+        if self._current_path is None:
+            self.notify("select a recipe first (Recipes tab)", severity="warning")
+            return
+        self._open_editor(self._current_path)
+
+    def action_new_recipe(self) -> None:
+        """Create a new recipe from a template and open it in the editor."""
+        from wiseql.tui.editor import NameModal
+
+        def _got(name: str | None) -> None:
+            if not name:
+                return
+            stem = name[:-5] if name.endswith(".toml") else name
+            path = self._project / "recipes" / f"{stem}.toml"
+            if path.exists():
+                self.notify(f"recipe '{stem}' already exists", severity="warning")
+                return
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(_recipe_template(stem, self._default_connection()), encoding="utf-8")
+            self._open_editor(path)
+
+        self.app.push_screen(NameModal("New recipe name", placeholder="late-returns"), _got)
+
+    def _open_editor(self, path: Path) -> None:
+        from wiseql.tui.editor import EditorScreen
+
+        # On save, refresh the recipe list/detail so the change shows immediately.
+        self.app.push_screen(EditorScreen(path, on_saved=self._load_recipes))
+
+    def _default_connection(self) -> str:
+        try:
+            return self._config().defaults.connection or "main"
+        except Exception:  # noqa: BLE001
+            return "main"
 
     def action_help(self) -> None:
         from wiseql.tui.app import HelpScreen

@@ -82,10 +82,15 @@ wiseql                             # open the TUI → pick the project → pick 
 wiseql run recipes/late-returns.toml --param run_date=2026-06-01   # …or headless (cron/CI; exit code is the contract)
 ```
 
-In the TUI: **F2** run · **Enter** drill into a step's data · **Ctrl+R** resume a
-failed run · **Ctrl+D** diff vs the previous run · **Ctrl+E** explore a run's
-data with ad-hoc SQL · **F4** (on a run) AI-explain what happened · **F9**
-settings.
+Projects live in a visible **`~/wiseql/`** folder by default (override with
+`[defaults] projects_dir` in `config.toml`). The dashboard shows the project's
+folder path, and **Ctrl+O** opens it in Finder.
+
+In the TUI: **F2** run · **F4** edit the selected recipe (built-in editor,
+Ctrl+S to save) · **F5** new recipe · **Enter** drill into a step's data ·
+**Ctrl+R** resume a failed run · **Ctrl+D** diff vs the previous run · **Ctrl+E**
+explore a run's data with ad-hoc SQL · **Ctrl+O** open the project folder ·
+**F4 on a run** AI-explain what happened · **F9** settings.
 
 ## Generate recipes with AI
 

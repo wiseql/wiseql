@@ -9,7 +9,12 @@ from pathlib import Path
 import pytest
 
 from wiseql.config import EnvBackend, get_backend, load_config
-from wiseql.config.model import Connection
+from wiseql.config.model import Connection, WiseQLConfig
+
+
+def test_default_projects_dir_is_visible_home() -> None:
+    # Projects default to a *visible* ~/wiseql, not a hidden dotfolder (S8).
+    assert WiseQLConfig().projects_root == Path("~/wiseql").expanduser()
 
 GLOBAL = """\
 [connections.oracle_dev]

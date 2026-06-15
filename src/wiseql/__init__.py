@@ -4,4 +4,4 @@ Run SQL recipes as small, observable, debuggable steps.
 https://wiseql.dev
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
