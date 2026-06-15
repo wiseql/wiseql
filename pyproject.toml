@@ -1,6 +1,6 @@
 [project]
 name = "wiseql"
-version = "0.1.0"
+version = "0.2.0"
 description = "WiseQL — the wise data browser: run SQL recipes as small, observable, debuggable steps. In development."
 readme = "README.md"
 requires-python = ">=3.12"
