@@ -61,7 +61,8 @@ class EditorScreen(Screen[bool]):
     TITLE = "WiseQL — Editor"
     BINDINGS = [
         Binding("ctrl+s", "save", "Save"),
-        Binding("escape", "close", "Back"),
+        # priority: the focused TextArea otherwise swallows Escape, trapping the user.
+        Binding("escape", "close", "Back", priority=True),
     ]
 
     DEFAULT_CSS = """
