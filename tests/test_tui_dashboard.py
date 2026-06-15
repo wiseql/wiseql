@@ -274,6 +274,68 @@ async def test_runs_tab_ctrl_e_opens_explorer_and_queries(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_overview_shows_project_path(tmp_path: Path) -> None:
+    proj = _project(tmp_path)
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.push_screen(ProjectDashboardScreen(proj, app.config_path))
+        await pilot.pause()
+        assert str(proj) in app.screen.overview_text  # path is visible
+
+
+@pytest.mark.asyncio
+async def test_ctrl_o_opens_folder(tmp_path: Path, monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr("wiseql.tui.dashboard._open_in_file_manager", lambda p: calls.append(p))
+    proj = _project(tmp_path)
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.push_screen(ProjectDashboardScreen(proj, app.config_path))
+        await pilot.pause()
+        await pilot.press("ctrl+o")
+        await pilot.pause()
+        assert calls == [proj]
+
+
+@pytest.mark.asyncio
+async def test_f4_edits_selected_recipe(tmp_path: Path) -> None:
+    from wiseql.tui.editor import EditorScreen
+
+    proj = _project(tmp_path)
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.push_screen(ProjectDashboardScreen(proj, app.config_path))
+        await pilot.pause()
+        await pilot.press("2")  # Recipes tab → selects the recipe
+        await pilot.pause()
+        await pilot.press("f4")
+        await pilot.pause()
+        assert isinstance(app.screen, EditorScreen)
+        assert app.screen._path == proj / "recipes" / "late-check.toml"
+
+
+@pytest.mark.asyncio
+async def test_f5_new_recipe_creates_and_opens(tmp_path: Path) -> None:
+    from textual.widgets import Input
+
+    from wiseql.tui.editor import EditorScreen, NameModal
+
+    proj = _project(tmp_path)
+    app = _app(tmp_path)
+    async with app.run_test() as pilot:
+        app.push_screen(ProjectDashboardScreen(proj, app.config_path))
+        await pilot.pause()
+        await pilot.press("f5")
+        await pilot.pause()
+        assert isinstance(app.screen, NameModal)
+        app.screen.query_one("#name-input", Input).value = "brand-new"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert (proj / "recipes" / "brand-new.toml").exists()
+        assert isinstance(app.screen, EditorScreen)
+
+
+@pytest.mark.asyncio
 async def test_f3_opens_connections(tmp_path: Path) -> None:
     from wiseql.tui.connections import ConnectionsScreen
 

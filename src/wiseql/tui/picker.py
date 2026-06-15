@@ -59,10 +59,11 @@ class ProjectPickerScreen(Screen[None]):
             table.add_row(path.name, str(recipes), str(runs), key=str(i))
 
         hint = self.query_one("#picker-hint", Static)
+        loc = f"[dim]projects in {self._projects_dir}[/]"
         if self._paths:
-            hint.update("[dim]↑/↓ select · enter open · n new · esc quit[/]")
+            hint.update(f"{loc}\n[dim]↑/↓ select · enter open · n new · esc quit[/]")
         else:
-            hint.update(f"[dim]No projects in {self._projects_dir}\nn new · esc quit[/]")
+            hint.update(f"{loc}\n[dim]none yet — n new · esc quit[/]")
         table.focus()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
